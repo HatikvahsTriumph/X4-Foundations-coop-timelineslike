@@ -1,4 +1,4 @@
-#requires -version 5
+﻿#requires -version 5
 <#
     x4mp_savecheck.ps1 - offline health check of an X4 save (built for X4MP station / fleet acceptance)
 

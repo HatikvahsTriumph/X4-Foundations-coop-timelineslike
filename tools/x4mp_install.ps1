@@ -1,4 +1,4 @@
-#requires -version 5
+﻿#requires -version 5
 <#
     x4mp_install.ps1 - X4MP co-op pack: one-click install / uninstall
 
@@ -54,11 +54,11 @@ if ($looksInsideGame) {
     Write-Host ''
     Write-Host '  [X] You extracted this pack INSIDE the game folder.' -ForegroundColor Red
     Write-Host ('      Current pack root: {0}' -f $script:Root) -ForegroundColor DarkGray
-    Write-Host '      The installer would then treat the game's own extensions\ as the pack folder and can never find the files to install.' -ForegroundColor Yellow
+    Write-Host '      The installer would then treat the game''s own extensions\ as the pack folder and can never find the files to install.' -ForegroundColor Yellow
     Write-Host '      Correct procedure (two steps):' -ForegroundColor Yellow
     Write-Host '        1) Extract the archive OUTSIDE the game folder, e.g. D:\X4MP\ or the Desktop;' -ForegroundColor Yellow
     Write-Host '        2) In that folder double-click 1-INSTALL.bat (it locates the game folder itself and asks if it cannot).' -ForegroundColor Yellow
-    Write-Host '      Cleanup: delete these items that were put into the game's extensions\ by mistake:' -ForegroundColor DarkGray
+    Write-Host '      Cleanup: delete these items that were put into the game''s extensions\ by mistake:' -ForegroundColor DarkGray
     Write-Host '        1-INSTALL.bat / 2-PLAY.bat / 3-UNINSTALL.bat / files\ / tools\ and the extracted folder itself' -ForegroundColor DarkGray
     Write-Host ''
     Read-Host '  Press Enter to exit'
@@ -163,7 +163,7 @@ function Ask-X4 {
         Write-Host ''
         Write-Host '  X4 Foundations was not found automatically. Paste the game install folder (the level containing X4.exe), e.g.:' -ForegroundColor Yellow
         Write-Host '      D:\SteamLibrary\steamapps\common\X4 Foundations' -ForegroundColor DarkGray
-        Write-Host '  (You can copy the path from Explorer's address bar and paste it here with Ctrl+V.)' -ForegroundColor DarkGray
+        Write-Host '  (You can copy the path from Explorer''s address bar and paste it here with Ctrl+V.)' -ForegroundColor DarkGray
         $p = (Read-Host '  Game folder').Trim().Trim('"')
         if (Test-X4Exe $p) { return $p }
         Write-Host '  No X4.exe in that folder, please try again.' -ForegroundColor Red
@@ -288,7 +288,7 @@ function Ask-Role {
         Write-Host ''
         Write-Host '  Is this machine the HOST or the CLIENT?' -ForegroundColor White
         Write-Host '    [1] I am the host   - the world is created here, friends connect to me' -ForegroundColor Gray
-        Write-Host '    [2] I am the client - I will enter the host's VPN address' -ForegroundColor Gray
+        Write-Host '    [2] I am the client - I will enter the host''s VPN address' -ForegroundColor Gray
         switch ((Read-Host '  Enter 1 or 2').Trim()) {
             '1' { return 'host' }
             '2' { return 'client' }
@@ -304,7 +304,7 @@ function Ask-HostIp {
     }
     while ($true) {
         Write-Host ''
-        Write-Host '  Enter the HOST's IPv4 address inside the virtual LAN (NOT 127.0.0.1)' -ForegroundColor Yellow
+        Write-Host '  Enter the HOST''s IPv4 address inside the virtual LAN (NOT 127.0.0.1)' -ForegroundColor Yellow
         Write-Host '  e.g. Radmin VPN is usually 26.x.x.x, ZeroTier usually 10.147.x.x / 172.x.x.x' -ForegroundColor DarkGray
         $ip = (Read-Host '  Host IP').Trim()
         if ($ip -match '^\d{1,3}(\.\d{1,3}){3}$') { return $ip }

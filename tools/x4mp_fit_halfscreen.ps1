@@ -1,4 +1,4 @@
-#requires -version 5
+﻿#requires -version 5
 <#
     x4mp_fit_halfscreen.ps1 - give two local X4 instances half the screen each (no overlap)
 

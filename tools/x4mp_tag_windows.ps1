@@ -1,4 +1,4 @@
-#requires -version 5
+﻿#requires -version 5
 <#
     x4mp_tag_windows.ps1 - write the X4MP ROLE onto each X4 window title.
 
