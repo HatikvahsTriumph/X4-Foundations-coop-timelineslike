@@ -135,14 +135,19 @@ $seen = @{}
 foreach ($h in $hull) {
     # 归属: 往前找最近的 class=" / macro="(存档里属性在 <hull> 之前)，窗口放宽到 4 KB
     $cls = '?'; $mac = '?'
+    # 2026-10-13 移植（v1.2 审查 P2-10）：原来是 $t.Substring($ci) —— 从命中位置一路复制到
+    # 字符串末尾，只为读开头几十个字符。存档几十 MB、<hull> 记录数千条 ⇒ 每次复制几十 MB，
+    # 整体 O(n²)，大档上表现为"脚本卡死"。这里只取需要的那一小段（class 64 / macro 256）。
     $ci = $t.LastIndexOf('class="', $h.Index)
     if ($ci -ge 0 -and ($h.Index - $ci) -lt 4000) {
-        $seg = $t.Substring($ci)
+        $len = [Math]::Min(64, $t.Length - $ci)
+        $seg = $t.Substring($ci, $len)
         if ($seg -match '^class="([a-z_]+)"') { $cls = $matches[1] }
     }
     $mi = $t.LastIndexOf('macro="', $h.Index)
     if ($mi -ge 0 -and ($h.Index - $mi) -lt 4000) {
-        $seg2 = $t.Substring($mi)
+        $len2 = [Math]::Min(256, $t.Length - $mi)
+        $seg2 = $t.Substring($mi, $len2)
         if ($seg2 -match '^macro="([^"]+)"') { $mac = $matches[1] }
     }
     $val = if ($h.Value -match 'value="([^"]+)"') { $matches[1] } else { '?' }

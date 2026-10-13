@@ -61,3 +61,21 @@ development tree and are **not** part of this package.
 | `content.xml` (both extensions) | — | `version="0.1.1"` |
 
 Per-file SHA-256: `CHECKSUMS.txt`. All three MD files pass an XML parse self-check.
+
+## Post-release: external review merge (2026-10-13)
+
+After the 0.1.1 tag, an external review of the separate "Porthole" novice bundle (v1.1 + its v1.2
+fix set) was ported wherever it applies to this package - the files share this package lineage, so
+the station-module and level findings hit us too. Per-item mapping: `docs/REVIEW-MERGE-2026-10-13.md`.
+
+* **Station module sync (the `WRITE LOST` class):** module keys are 1-based everywhere, the
+  ineffective full-list table assignment is gone, and both module counters increment before the
+  null / sequence guards, so a destroyed station no longer shifts every later station index.
+* **Level:** `X4MP_Level_Init` initialises six globals that were previously only ever read;
+  `X4MP_Level_Freeze` is back to 200 ms as its own comment always claimed.
+* **Ghost destroy:** double null guard, silent removal (`explosion="false"`) kept.
+* **Tools:** strict 0-255 IPv4 regex, `q` / empty exit in the host-IP prompt, O(n^2) fix in
+  `x4mp_savecheck.ps1`, and `nums()` / `safe()` hardening in `x4mp_bridge.lua` (all 22
+  registrations wrapped, 14 payload tables validated).
+* Unchanged on purpose: no Porthole tunnel code, the DLL is untouched, uninstall behaviour
+  (including the third-party `x4native` removal) is unchanged.

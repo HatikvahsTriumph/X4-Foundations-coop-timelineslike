@@ -69,6 +69,9 @@ $script:StageExt    = Join-Path $script:Root 'files\extensions'
 $script:Port        = 42069
 $script:X4DirParam  = $X4Dir
 $script:ExtNames    = @('x4native','x4mp_native','x4mp_test')
+# 2026-10-13 移植（v1.2 审查 P2）：旧正则 ^\d{1,3}(\.\d{1,3}){3}$ 会把 999.999.999.999
+# 当成合法 IP 收下，写进 config.txt 后表现为"地址填了却连不上"。这里收紧到每段 0-255。
+$script:IPv4Re      = '^(25[0-5]|2[0-4]\d|1\d\d|[1-9]?\d)(\.(25[0-5]|2[0-4]\d|1\d\d|[1-9]?\d)){3}$'
 
 function Say([string]$msg, [string]$color = 'Gray') {
     if (-not $Quiet) { Write-Host $msg -ForegroundColor $color }
@@ -298,17 +301,24 @@ function Ask-Role {
 }
 
 function Ask-HostIp {
+    # 2026-10-13 移植（v1.2 审查）：原来的 while($true) 没有任何出口 —— 只按回车会一直
+    # 空转（脚本卡死，用户以为"装完了"）；现在 q 或空输入明确退出，并提示合法格式。
     if ($HostIp) {
-        if ($HostIp -match '^\d{1,3}(\.\d{1,3}){3}$') { return $HostIp }
+        if ($HostIp -match $script:IPv4Re) { return $HostIp }
         Write-Host ("  The IP given as a parameter looks wrong: {0}" -f $HostIp) -ForegroundColor Red
     }
     while ($true) {
         Write-Host ''
         Write-Host '  Enter the HOST''s IPv4 address inside the virtual LAN (NOT 127.0.0.1)' -ForegroundColor Yellow
         Write-Host '  e.g. Radmin VPN is usually 26.x.x.x, ZeroTier usually 10.147.x.x / 172.x.x.x' -ForegroundColor DarkGray
+        Write-Host '  Type q and press Enter to cancel.' -ForegroundColor DarkGray
         $ip = (Read-Host '  Host IP').Trim()
-        if ($ip -match '^\d{1,3}(\.\d{1,3}){3}$') { return $ip }
-        Write-Host '  Bad format - expected x.x.x.x.' -ForegroundColor Red
+        if ($ip -eq 'q' -or $ip -eq 'Q' -or [string]::IsNullOrWhiteSpace($ip)) {
+            Write-Host '  Cancelled - no host IP given.' -ForegroundColor Red
+            exit 1
+        }
+        if ($ip -match $script:IPv4Re) { return $ip }
+        Write-Host '  Bad format - expected x.x.x.x, each part 0-255.' -ForegroundColor Red
     }
 }
 

@@ -97,6 +97,17 @@
              先建景（否则主机没有"客机场景"可等，会成环），主机则必须等客机把场景立起来
              （用户规则："客户端没进入就不许向后面进行"）。 -->
         <set_value name="global.$X4MPLevelPeerScene"      exact="0" />
+        <!-- ★2026-10-13 移植（v1.2 审查 P1-5）：下面这 6 个全局在后面各个 cue 里都会被读取，
+             此前从未在 Init 里初始化，全靠"undefined 恰好被 ? 守卫吃掉"侥幸工作。只要有一处
+             漏写 ?（例如拿 event.object 与未定义的全局做等值比较），MD 就会在有船被摧毁时抛
+             Property lookup failed 并丢弃整轮动作。这里补齐初值（本条 do_if 已保证只在
+             "保护目标还不存在"的新局里执行，读档不会覆盖已有状态）。 -->
+        <set_value name="global.$X4MPLevelK"              exact="null" />
+        <set_value name="global.$X4MPLevelGhost"          exact="null" />
+        <set_value name="global.$X4MPLevelGhostTries"     exact="0" />
+        <set_value name="global.$X4MPLevelClientShip"     exact="null" />
+        <set_value name="global.$X4MPLevelClientShipTry"  exact="0" />
+        <set_value name="global.$X4MPLevelClientOldShip"  exact="null" />
         </do_if>
         <do_if value="not global.$X4MPHostTimeOffset?">
           <set_value name="global.$X4MPHostTimeOffset" exact="0" />
@@ -1055,7 +1066,7 @@
            * 位置连续、不瞬移，不打断停靠/自动驾驶（比 <warp> 安全得多）；
            * 玩家推满杆也只能在 0.2 s 的加速度里抖几米 ⇒ 观感就是"冻住"。
          主机回来（PeerDown = 0）⇒ 闸门不成立 ⇒ 本条 cue 自动停止 ⇒ 世界解冻。 -->
-    <cue name="X4MP_Level_Freeze" module="x4mp_level_boron" instantiate="true" checkinterval="100ms">
+    <cue name="X4MP_Level_Freeze" module="x4mp_level_boron" instantiate="true" checkinterval="200ms">
       <conditions>
         <check_all>
           <check_value value="global.$X4MPLevelIsClient? and global.$X4MPLevelIsClient ge 1" />

@@ -146,7 +146,13 @@
         <event_ui_triggered screen="'X4MP_GhostSync'" control="'destroy'" />
       </conditions>
       <actions>
-        <destroy_object object="global.$X4MPGhostShip" explosion="false" />
+        <!-- ★2026-10-13 移植（v1.2 审查 P1-8）：对已销毁的对象再 destroy 一次会抛错、连带整轮动作被丢弃（本文件 X4MP_NetworkSync 就是这么写的）。这里按同样方式加双重空守卫 —— 对端会死两次（重生后再死），第二次进来时这里可能已经解析到空引用。
+             ⚠ 注意：本项目这条 lane 刻意用 explosion="false"（静默移除，见上方说明），不要照抄审查包里那版 explosion="true"。 -->
+        <do_if value="global.$X4MPGhostShip?">
+          <do_if value="global.$X4MPGhostShip.exists">
+            <destroy_object object="global.$X4MPGhostShip" explosion="false" />
+          </do_if>
+        </do_if>
       </actions>
     </cue>
 

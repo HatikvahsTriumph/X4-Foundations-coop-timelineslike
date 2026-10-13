@@ -297,6 +297,10 @@
               <set_value name="global.$X4MPEqSeqNoDronesStock" operation="add" exact="1" />
             </do_if>
             <set_value name="global.$X4MPEqSeqLevel" exact="$stn.moduleloadoutlevel" />
+            <!-- ★2026-10-12 修复（审查 P0-3）：计数器放在 $seq 判空【之前】。
+                 读档回来的站没有 plannedconstruction，整个 do_if $seq? 分支会被跳过；
+                 若计数器留在里面，这类站就不占位 ⇒ 后面的站 idx 全部前移，与站名序号脱节。 -->
+            <set_value name="global.$X4MPModsStnCounter" operation="add" exact="1" />
             <set_value name="$seq" exact="$stn.plannedconstruction.sequence" />
             <do_if value="$seq?">
               <set_value name="global.$X4MPEqSeqFound" operation="add" exact="1" />
@@ -382,11 +386,15 @@
                    都是"名字即键"（"X4MP STN n" / "X4MP NPC n"），这里是同一招的延伸：
                    k = 本次枚举顺序，DLL 从名字里解析 k，两端因此天然一致。
                    ============================================================ -->
-              <set_value name="global.$X4MPModsStnCounter" operation="add" exact="1" />
+              <!-- （计数器已上移到 $seq 判空之前，见上方注释） -->
               <find_object_component name="$stnmods" object="$stn" class="class.module"
                                      checkoperational="false" multiple="true" recursive="true" />
               <do_if value="$stnmods?">
-                <set_value name="global.$X4MPStationMods.{$X4MPModsStnCounter}" exact="$stnmods" />
+                <!-- ★2026-10-12 修复（审查 P0-2）：删掉原来的整份列表赋值
+                     `global.$X4MPStationMods.{idx} = $stnmods`。本文件 676-689 行自己
+                     记着 run #21-S 的实测结论：局部列表整份赋进全局表**不进存档状态**，
+                     读档后表是空的。这一行既无效、又误导人以为这里也建了表 —— 建表统一由
+                     X4MP_StationModuleRegistry 负责（它逐个赋值，且现在同为 1-based）。 -->
                 <do_all exact="$stnmods.count" counter="$m">
                   <set_object_name object="$stnmods.{$m}"
                                    name="'X4MP STN ' + global.$X4MPModsStnCounter + '#' + $m" />
@@ -668,10 +676,22 @@
         <set_value name="global.$X4MPStationCompShields" exact="0" />
         <do_if value="global.$X4MPStationList?">
           <do_for_each name="$stn" in="global.$X4MPStationList">
+            <!-- ★2026-10-12 修复（审查 P0-3）：计数器必须在 $stn 判空【之前】自增。
+                 站被摧毁后列表里留下的是 null（刻意保留的空洞，正是它保证了
+                 "列表下标 = 站名里的 idx"）；若在这里跳过空洞，后面每一座站的 $i
+                 都会比它名字里的 idx 小 N ⇒ X4MP STN 3 的模块被登记到 .{2}，
+                 从第二座站被摧毁那一刻起剩余所有站的模块同步全错。 -->
+            <set_value name="global.$X4MPModsStnCounter" operation="add" exact="1" />
             <do_if value="$stn?">
-              <set_value name="global.$X4MPModsStnCounter" operation="add" exact="1" />
               <set_value name="$i" exact="global.$X4MPModsStnCounter" />
-              <set_value name="$k" exact="0" />
+              <!-- ★2026-10-12 修复（审查 P0-2）：k 起点 0 → 1。
+                   本文件的模块"名字即键"有两个来源：本 cue（原 0-based）与上面的
+                   X4MP_EquipStationsSeq（do_all counter，$m 是 1-based，且它 10 s 才跑、
+                   会覆盖这里的命名）。结果是"最终名字 1-based、表 0-based"恒定错位一格
+                   —— DLL 按名字解析的 k 打到 MD 表就差一个，k=N 直接取到 nil，
+                   症状正是历史上那 179 行 PEER DAMAGE VERIFY … -> WRITE LOST。
+                   两条通道统一为 1-based（与 event.param3.{n} / $lo.{1} 的惯例一致）。 -->
+              <set_value name="$k" exact="1" />
               <!-- ============================================================
                    2026-09-22 (run #21-S)：**每个模块单独赋值**
 
@@ -829,7 +849,12 @@
       <param name="Station" default="null" />
     </params>
     <actions>
-      <do_if value="player.ship and player.ship.parent and (player.ship.parent.isclass.dockingbay or player.ship.parent.isclass.pier or player.ship.parent.isclass.station)">
+      <!-- 2026-10-12 修复（审查 P2）：原条件 player.ship and player.ship.parent …
+           没判空。玩家此刻可能没有座舰（站在空间站里 / 刚死亡 / 读档瞬间），MD 的 and
+           是否短路没有保证，一旦先求 player.ship.parent 就会抛 Property lookup failed
+           —— 而本 library 是被 X4MP_StationVitals 在 destroy 之前调用的，抛错会连带
+           整个撤离动作被跳过。逐段加 ? 守卫。 -->
+      <do_if value="player.ship? and player.ship.parent? and (player.ship.parent.isclass.dockingbay or player.ship.parent.isclass.pier or player.ship.parent.isclass.station)">
         <undock ship="player.ship" />
         <warp object="player.ship" sector="player.sector">
           <position object="$Station" x="0" y="0" z="2500" />

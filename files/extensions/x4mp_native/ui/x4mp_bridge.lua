@@ -8,6 +8,43 @@
 -- <event_ui_triggered screen="'X4MP_GhostSync'" control="'move'"/>.
 -- ---------------------------------------------------------------------------
 
+-- ---------------------------------------------------------------------------
+-- 2026-10-13 移植（v1.2 审查 P2-1）：数值通道统一校验 + 统一错误兜底。
+--
+-- nums: 字段匹配用的是 `[^,]+`（"不是逗号就行"），所以 "abc,1,2,..." 这类载荷能匹配通过，
+-- 但 tonumber() 返回 nil —— nil 进了 AddUITriggeredEvent 的表，MD 侧读到的
+-- event.param3.{n} 就是空的，后续算术静默失败、日志里什么都没有。现在任一字段非数字
+-- 就整条丢弃并记一条 DebugError，故障从"静默"变"可见"。
+-- ---------------------------------------------------------------------------
+local function nums(param, ...)
+    local t = { }
+    for i = 1, select('#', ...) do
+        local v = tonumber((select(i, ...)))
+        if v == nil then
+            pcall(function()
+                DebugError("x4mp_bridge: non-numeric field #" .. i .. " in payload: " .. tostring(param))
+            end)
+            return nil
+        end
+        t[i] = v
+    end
+    return t
+end
+
+-- safe: X4 的 UI Lua 里任一回调抛错会污染整条事件链，一条 lane 的解析问题不该拖死其余
+-- 所有 lane。这里给每个 handler 套一层 pcall；DebugError 自身也再套一层，免得"报错的
+-- 动作"本身又抛一次（本文件的 22 个 RegisterEvent 全部改走 safe()）。
+local function safe(name, fn)
+    return function(event_name, param)
+        local ok, err = pcall(fn, event_name, param)
+        if not ok then
+            pcall(function()
+                DebugError("x4mp_bridge: handler " .. name .. " failed: " .. tostring(err))
+            end)
+        end
+    end
+end
+
 local function on_move(event_name, param)
     -- X4 RegisterEvent callbacks receive (event_name, param).
     if not param or type(param) ~= "string" then
@@ -21,10 +58,9 @@ local function on_move(event_name, param)
         return
     end
 
-    AddUITriggeredEvent('X4MP_GhostSync', 'move', {
-        tonumber(x), tonumber(y), tonumber(z),
-        tonumber(yaw), tonumber(pitch), tonumber(roll)
-    })
+    local nv = nums(param, x, y, z, yaw, pitch, roll) 
+    if not nv then return end 
+    AddUITriggeredEvent('X4MP_GhostSync', 'move', nv)
 end
 
 -- Incoming remote damage: "shieldDamage,hullDamage" in percent points.
@@ -38,7 +74,9 @@ local function on_damage(event_name, param)
         DebugError("x4mp_bridge: bad damage payload: " .. tostring(param))
         return
     end
-    AddUITriggeredEvent('X4MP_SelfSync', 'damage', { tonumber(shield), tonumber(hull), tonumber(targetType) })
+    local nv = nums(param, shield, hull, targetType) 
+    if not nv then return end 
+    AddUITriggeredEvent('X4MP_SelfSync', 'damage', nv)
 end
 
 -- Remote ship died: blow up the local ghost ship.
@@ -86,12 +124,9 @@ local function on_spawn_remote(event_name, param)
     AddUITriggeredEvent('X4MP_RemoteSync', 'spawnmacro', macro)
     -- 2) the row itself: numbers only (the rig flag moved from field 10 to field 9
     --    when the macro left the table - MD reads event.param3.{9} for it).
-    AddUITriggeredEvent('X4MP_RemoteSync', 'spawn', {
-        tonumber(x), tonumber(y), tonumber(z),
-        tonumber(yaw), tonumber(pitch), tonumber(roll),
-        tonumber(faction), tonumber(id),
-        tonumber(flags)
-    })
+    local nv = nums(param, x, y, z, yaw, pitch, roll, faction, id, flags) 
+    if not nv then return end 
+    AddUITriggeredEvent('X4MP_RemoteSync', 'spawn', nv)
 end
 
 -- Client: destroy the local NPC for a despawned logical id.
@@ -117,7 +152,9 @@ local function on_despawn(event_name, param)
         DebugError("x4mp_bridge: bad despawn payload: " .. tostring(param))
         return
     end
-    AddUITriggeredEvent('X4MP_DespawnSync', 'despawn', { tonumber(lid), tonumber(silent) })
+    local nv = nums(param, lid, silent) 
+    if not nv then return end 
+    AddUITriggeredEvent('X4MP_DespawnSync', 'despawn', nv)
 end
 
 -- Client: apply damage to the local NPC for a logical id.
@@ -130,7 +167,9 @@ local function on_npc_damage(event_name, param)
         DebugError("x4mp_bridge: bad npc damage payload: " .. tostring(param))
         return
     end
-    AddUITriggeredEvent('X4MP_NpcDamageSync', 'damage', { tonumber(lid), tonumber(hull), tonumber(shield) })
+    local nv = nums(param, lid, hull, shield) 
+    if not nv then return end 
+    AddUITriggeredEvent('X4MP_NpcDamageSync', 'damage', nv)
 end
 
 -- BOTH PEERS (P0): absolute NPC vitals "logicalID,hullPct,shieldPct".
@@ -145,18 +184,19 @@ local function on_npc_vitals(event_name, param)
         DebugError("x4mp_bridge: bad npc vitals payload: " .. tostring(param))
         return
     end
-    AddUITriggeredEvent('X4MP_NpcVitalsSync', 'vitals',
-        { tonumber(lid), tonumber(hull), tonumber(shield) })
+    local nv = nums(param, lid, hull, shield) 
+    if not nv then return end 
+    AddUITriggeredEvent('X4MP_NpcVitalsSync', 'vitals', nv)
 end
 
-RegisterEvent("x4mp_move",           on_move)
-RegisterEvent("x4mp_damage",         on_damage)
-RegisterEvent("x4mp_destroy",        on_destroy)
-RegisterEvent("x4mp_spawn_npc",      on_spawn_npc)
-RegisterEvent("x4mp_spawn_remote",   on_spawn_remote)
-RegisterEvent("x4mp_despawn_remote", on_despawn)
-RegisterEvent("x4mp_npc_damage",     on_npc_damage)
-RegisterEvent("x4mp_npc_vitals",     on_npc_vitals)
+RegisterEvent("x4mp_move", safe("move", on_move))
+RegisterEvent("x4mp_damage", safe("damage", on_damage))
+RegisterEvent("x4mp_destroy", safe("destroy", on_destroy))
+RegisterEvent("x4mp_spawn_npc", safe("spawn_npc", on_spawn_npc))
+RegisterEvent("x4mp_spawn_remote", safe("spawn_remote", on_spawn_remote))
+RegisterEvent("x4mp_despawn_remote", safe("despawn", on_despawn))
+RegisterEvent("x4mp_npc_damage", safe("npc_damage", on_npc_damage))
+RegisterEvent("x4mp_npc_vitals", safe("npc_vitals", on_npc_vitals))
 
 -- BOTH PEERS (P2 v1): behavioural semantics relayed from the host.
 -- Payload "logicalID,op,orderIdx,targetLid,targetKind"; op 1 = set_order,
@@ -174,8 +214,9 @@ local function on_npc_order(event_name, param)
         DebugError("x4mp_bridge: bad npc order payload: " .. tostring(param))
         return
     end
-    AddUITriggeredEvent('X4MP_NpcOrderSync', 'order',
-        { tonumber(lid), tonumber(op), tonumber(idx), tonumber(tgt), tonumber(kind) })
+    local nv = nums(param, lid, op, idx, tgt, kind) 
+    if not nv then return end 
+    AddUITriggeredEvent('X4MP_NpcOrderSync', 'order', nv)
 end
 
 -- Client: a host NPC fired. Payload "logicalID,targetLid,shots".
@@ -190,16 +231,17 @@ local function on_npc_fire(event_name, param)
         DebugError("x4mp_bridge: bad npc fire payload: " .. tostring(param))
         return
     end
-    AddUITriggeredEvent('X4MP_NpcFireSync', 'fire',
-        { tonumber(lid), tonumber(tgt), tonumber(shots) })
+    local nv = nums(param, lid, tgt, shots) 
+    if not nv then return end 
+    AddUITriggeredEvent('X4MP_NpcFireSync', 'fire', nv)
 end
 
 -- These two must stay BELOW their handler definitions: RegisterEvent takes the
 -- function by value, and a file-scope `local function` is not visible before its
 -- own definition line (an upvalue that is still nil there, not an error - the
 -- registration would silently do nothing).
-RegisterEvent("x4mp_npc_order",      on_npc_order)
-RegisterEvent("x4mp_npc_fire",       on_npc_fire)
+RegisterEvent("x4mp_npc_order", safe("npc_order", on_npc_order))
+RegisterEvent("x4mp_npc_fire", safe("npc_fire", on_npc_fire))
 
 -- 10.8l: the world handshake's last step. The DLL raises this on BOTH peers at
 -- the same moment - the host when the client reports that every puppet stands,
@@ -211,7 +253,7 @@ local function on_universe_go(event_name, param)
     AddUITriggeredEvent('X4MP_NpcSync', 'go')
 end
 
-RegisterEvent("x4mp_universe_go",    on_universe_go)
+RegisterEvent("x4mp_universe_go", safe("universe_go", on_universe_go))
 -- Doc 4 (station sync, S4): the host's absolute station state.
 -- Payload "idx,hullPct,shieldPct,state"; hull/shield may be -1 ("leave
 -- unchanged") and state 3 means "the station is gone on the host" (the MD cue
@@ -226,8 +268,9 @@ local function on_station_vitals(event_name, param)
         DebugError("x4mp_bridge: bad station vitals payload: " .. tostring(param))
         return
     end
-    AddUITriggeredEvent('X4MP_StationVitalsSync', 'vitals',
-        { tonumber(idx), tonumber(hull), tonumber(shield), tonumber(state) })
+    local nv = nums(param, idx, hull, shield, state) 
+    if not nv then return end 
+    AddUITriggeredEvent('X4MP_StationVitalsSync', 'vitals', nv)
 end
 
 -- Doc 4 section 4.6 V2: the local mirror station shot the peer hero's replica,
@@ -242,12 +285,13 @@ local function on_ghost_vitals(event_name, param)
         DebugError("x4mp_bridge: bad ghost vitals payload: " .. tostring(param))
         return
     end
-    AddUITriggeredEvent('X4MP_GhostSync', 'vit',
-        { tonumber(hull), tonumber(shield) })
+    local nv = nums(param, hull, shield) 
+    if not nv then return end 
+    AddUITriggeredEvent('X4MP_GhostSync', 'vit', nv)
 end
 
-RegisterEvent("x4mp_station_vitals", on_station_vitals)
-RegisterEvent("x4mp_ghost_vitals",   on_ghost_vitals)
+RegisterEvent("x4mp_station_vitals", safe("station_vitals", on_station_vitals))
+RegisterEvent("x4mp_ghost_vitals", safe("ghost_vitals", on_ghost_vitals))
 
 -- ---------------------------------------------------------------------------
 -- 2026-09-21 (run #21-J, user request "station damage is per module"): one row per
@@ -267,11 +311,12 @@ local function on_station_module_hull(event_name, param)
         DebugError("x4mp_bridge: bad station module payload: " .. tostring(param))
         return
     end
-    AddUITriggeredEvent('X4MP_StationModuleSync', 'mod',
-        { tonumber(idx), tonumber(m), tonumber(hull) })
+    local nv = nums(param, idx, m, hull) 
+    if not nv then return end 
+    AddUITriggeredEvent('X4MP_StationModuleSync', 'mod', nv)
 end
 
-RegisterEvent("x4mp_station_module_hull", on_station_module_hull)
+RegisterEvent("x4mp_station_module_hull", safe("station_module_hull", on_station_module_hull))
 
 -- ---------------------------------------------------------------------------
 -- 2026-09-21 (技术文档5 §5 · P0-1): the peer's personal actions, host side.
@@ -291,11 +336,12 @@ local function on_peer_event(event_name, param)
         DebugError("x4mp_bridge: bad peer event payload: " .. tostring(param))
         return
     end
-    AddUITriggeredEvent('X4MP_PeerEventSync', 'ev',
-        { tonumber(kind), tonumber(key), tonumber(id), tonumber(mod) })
+    local nv = nums(param, kind, key, id, mod) 
+    if not nv then return end 
+    AddUITriggeredEvent('X4MP_PeerEventSync', 'ev', nv)
 end
 
-RegisterEvent("x4mp_peer_event", on_peer_event)
+RegisterEvent("x4mp_peer_event", safe("peer_event", on_peer_event))
 
 -- ===========================================================================
 -- ★2026-09-28（run #26e · 合并 Stage 2）· 事件别名层（与 0.2-RC 的事件名对齐）
@@ -342,10 +388,10 @@ local function on_alias_reclaim(event_name, param)
                tostring(param) .. ") - the 0.2-RC peer trimmed its roster; OUR list index may drift")
 end
 
-RegisterEvent("x4mp_ghost_dock",     on_alias_ghost_dock)
-RegisterEvent("x4mp_ghost_undock",   on_alias_ghost_undock)
-RegisterEvent("x4mp_respawn",        on_alias_respawn)
-RegisterEvent("x4mp_puppet_reclaim", on_alias_reclaim)
+RegisterEvent("x4mp_ghost_dock", safe("alias_ghost_dock", on_alias_ghost_dock))
+RegisterEvent("x4mp_ghost_undock", safe("alias_ghost_undock", on_alias_ghost_undock))
+RegisterEvent("x4mp_respawn", safe("alias_respawn", on_alias_respawn))
+RegisterEvent("x4mp_puppet_reclaim", safe("alias_reclaim", on_alias_reclaim))
 
 -- ---------------------------------------------------------------------------
 -- 2026-09-21 (技术文档5 §5 · P0-2): the host's authoritative clock.
@@ -366,11 +412,12 @@ local function on_host_time(event_name, param)
         DebugError("x4mp_bridge: bad host time payload: " .. tostring(param))
         return
     end
-    AddUITriggeredEvent('X4MP_HostTimeSync', 'clock',
-        { tonumber(host), tonumber(off), tonumber(stage) })
+    local nv = nums(param, host, off, stage) 
+    if not nv then return end 
+    AddUITriggeredEvent('X4MP_HostTimeSync', 'clock', nv)
 end
 
-RegisterEvent("x4mp_host_time", on_host_time)
+RegisterEvent("x4mp_host_time", safe("host_time", on_host_time))
 
 -- ---------------------------------------------------------------------------
 -- 2026-09-21 (run #21-Q): station MODULE damage, applied with the ENGINE's own
@@ -392,11 +439,12 @@ local function on_station_module_damage(event_name, param)
         DebugError("x4mp_bridge: bad station module damage payload: " .. tostring(param))
         return
     end
-    AddUITriggeredEvent('X4MP_StationModuleDamageSync', 'dmg',
-        { tonumber(idx), tonumber(m), tonumber(hull) })
+    local nv = nums(param, idx, m, hull) 
+    if not nv then return end 
+    AddUITriggeredEvent('X4MP_StationModuleDamageSync', 'dmg', nv)
 end
 
-RegisterEvent("x4mp_station_module_damage", on_station_module_damage)
+RegisterEvent("x4mp_station_module_damage", safe("station_module_damage", on_station_module_damage))
 
 -- ---------------------------------------------------------------------------
 -- 2026-09-27 (run #23 · user report "客户端又创建了我们很久很久之前就废弃的靶机幽灵船"):
@@ -420,6 +468,6 @@ local function on_peer_hero(event_name, param)
     AddUITriggeredEvent('X4MP_PeerHeroSync', 'macro', param)
 end
 
-RegisterEvent("x4mp_peer_hero", on_peer_hero)
+RegisterEvent("x4mp_peer_hero", safe("peer_hero", on_peer_hero))
 
 
