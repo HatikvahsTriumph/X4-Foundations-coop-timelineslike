@@ -3,7 +3,7 @@
     x4mp_fit_halfscreen.ps1 - give two local X4 instances half the screen each (no overlap)
 
     Why: in windowed mode X4 FORCES its own window width (measured: res_width=960 with 135% display scaling
-    显示缩放 135% ⇒ 窗口物理宽度 1296 px，被人为改成 960 后游戏会立刻抢回 1296）。
+    显示缩放 135% ⇒ 窗口物理宽度 1296 px，被人为改成 960 后游戏会立刻抢回 1296)。
     so side-by-side placement depends on res_width/res_height in config.xml, not on MoveWindow.
     This script derives a 16:9 render resolution from half the work area and writes it into both profiles
     config.xml (keeping .pre_halfres.bak backups) and prints the placement command that
@@ -30,7 +30,7 @@ $ErrorActionPreference = 'Stop'
 $cfgDir = Join-Path $env:USERPROFILE 'Documents\Egosoft\X4'
 $cache  = Join-Path $env:TEMP 'X4MP\dpi_factor.txt'
 
-# 16:9 候选（从大到小），只取 ≤ 半屏的那些
+# 16:9 候选(从大到小)，只取 ≤ 半屏的那些
 $candidates = @(
     @{W=1920;H=1080}, @{W=1600;H=900}, @{W=1366;H=768}, @{W=1280;H=720},
     @{W=1152;H=648}, @{W=1024;H=576}, @{W=960;H=540}, @{W=854;H=480},
@@ -66,7 +66,7 @@ function Get-CurrentRes([string]$profile) {
 
 function Get-ScaleFactor {
     if ($Scale -gt 0) { return $Scale }
-    # 1) 正在运行的 X4 窗口：物理宽 / 它的 res_width —— 最直接、也最可靠
+    # 1) 正在运行的 X4 窗口: 物理宽 / 它的 res_width —— 最直接、也最可靠
     foreach ($p in (Get-Process -ErrorAction SilentlyContinue | Where-Object { $_.ProcessName -match '^X4' })) {
         try { $p.Refresh() } catch { continue }
         $h = $p.MainWindowHandle

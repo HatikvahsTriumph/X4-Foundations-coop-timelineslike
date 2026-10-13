@@ -31,7 +31,7 @@ $script:Root        = Split-Path -Parent $PSScriptRoot          # pack root fold
 
 # 2026-09-29 (0.1, verified by users) Opening guard: validate the pack and its location BEFORE any file operation
 # Why first: the old order copied first and checked the pack later, so an incomplete pack or a wrong
-# 报错会出现在拷贝中途（Get-ChildItem: Cannot find path …files\extensions\x4native），
+# 报错会出现在拷贝中途(Get-ChildItem: Cannot find path …files\extensions\x4native)，
 # that hid the real cause. These two checks turn the common mistakes into one plain sentence.
 $script:StageExtChk = Join-Path $script:Root 'files\extensions'
 if (-not (Test-Path -LiteralPath $script:StageExtChk)) {
@@ -45,7 +45,7 @@ if (-not (Test-Path -LiteralPath $script:StageExtChk)) {
     exit 1
 }
 
-# 是否被解压进了Game folder？（本安装在 <X4>\extensions\ 里，或它的上一级有 X4.exe）
+# 是否被解压进了Game folder？(本安装在 <X4>\extensions\ 里，或它的上一级有 X4.exe)
 $parentOfRoot = Split-Path -Parent $script:Root
 $looksInsideGame = ((Split-Path -Leaf $script:Root) -ieq 'extensions') -or
                    (Test-Path -LiteralPath (Join-Path $parentOfRoot 'X4.exe')) -or
@@ -184,8 +184,8 @@ function Confirm-GameClosed([string]$x4) {
 # --------------------------------------------------------------- install / uninstall
 # 2026-09-28 (run #26): the backup folder MUST live at the <X4> root (next to X4.exe),
 # 不能放在 extensions\ 里面。
-# 原因（实测踩坑）：X4 会扫描 extensions\ 下的**每一个**扩展目录（不认 "_" 前缀），
-# 所以 extensions\_x4mp_backup_* 里的旧副本会被**当成第二个扩展一起加载**：
+# 原因(实测踩坑): X4 会扫描 extensions\ 下的**每一个**扩展目录(不认 "_" 前缀)，
+# 所以 extensions\_x4mp_backup_* 里的旧副本会被**当成第二个扩展一起加载**: 
 # two extensions with the same id - which one wins depends on load order and may differ per machine.
 # That is what the 2026-09-27 cross-machine test showed: host 3 sectors, client 2 (two different worlds),
 # connected and clock-synced, yet never seeing each other ships.
@@ -214,14 +214,14 @@ function Move-StaleExtensionCopies([string]$x4) {
     foreach ($d in $stale) {
         Move-Item -LiteralPath $d.FullName -Destination (Join-Path $dst $d.Name) -Force -ErrorAction SilentlyContinue
     }
-    Say ("  [!] extensions\ 里有 {0} 个会被 X4 一起加载的旧副本/备份，已移出到：{1}" -f $stale.Count, $dst) 'Yellow'
-    Say '      （X4 loads every extension folder under extensions\; a stale copy with the same id makes the two worlds disagree）' 'DarkGray'
+    Say ("  [!] extensions\ 里有 {0} 个会被 X4 一起加载的旧副本/备份，已移出到: {1}" -f $stale.Count, $dst) 'Yellow'
+    Say '      (X4 loads every extension folder under extensions\; a stale copy with the same id makes the two worlds disagree)' 'DarkGray'
 }
 
 function Backup-Existing([string]$x4) {
     $extRoot = Join-Path $x4 'extensions'
     $stamp   = Get-Date -Format 'yyyyMMdd_HHmmss'
-    # ★放在 <X4> 根目录（与 X4.exe 同级），**不在** extensions\ 里面 —— 见上面
+    # ★放在 <X4> 根目录(与 X4.exe 同级)，**不在** extensions\ 里面 —— 见上面
     # the Move-StaleExtensionCopies notes.
     $bkRoot  = Join-Path $x4 "_x4mp_backup_$stamp"
     $moved   = @()
@@ -242,7 +242,7 @@ function Backup-Existing([string]$x4) {
 function Install-Files([string]$x4) {
     $extRoot = Join-Path $x4 'extensions'
     New-Item -ItemType Directory -Force -Path $extRoot | Out-Null
-    Move-StaleExtensionCopies $x4      # ★run #26：first move stale copies/backups out of extensions\
+    Move-StaleExtensionCopies $x4      # ★run #26: first move stale copies/backups out of extensions\
     Backup-Existing $x4
     foreach ($n in $script:ExtNames) {
         $src = Join-Path $script:StageExt $n
@@ -261,7 +261,7 @@ function Install-Files([string]$x4) {
 function Remove-Files([string]$x4) {
     $extRoot = Join-Path $x4 'extensions'
     $stamp   = Get-Date -Format 'yyyyMMdd_HHmmss'
-    # ★run #26：同样放到 <X4> 根目录，不放 extensions\（见 Move-StaleExtensionCopies）
+    # ★run #26: 同样放到 <X4> 根目录，不放 extensions\(见 Move-StaleExtensionCopies)
     $bkRoot  = Join-Path $x4 "_x4mp_removed_$stamp"
     Move-StaleExtensionCopies $x4
     foreach ($n in $script:ExtNames) {
@@ -378,7 +378,7 @@ try { $x4 = Find-X4 } catch { Say ("  [!] Error while autodetecting the game fol
 if (-not $x4) { $x4 = Ask-X4 }
 if (-not (Test-Path -LiteralPath (Join-Path $x4 'X4.exe'))) { Write-Host '  [X] no X4.exe in that folder.' -ForegroundColor Red; exit 1 }
 
-Head ("Game folder：" + $x4)
+Head ("Game folder: " + $x4)
 $exeVer = (Get-Item -LiteralPath (Join-Path $x4 'X4.exe')).VersionInfo.FileVersion
 Say ("  X4.exe version detected: {0}" -f $exeVer) 'Gray'
 Say '  [!] Requirement: you and your friend must run the same version (Steam updates automatically - keep both sides current)' 'Yellow'
@@ -387,7 +387,7 @@ Confirm-GameClosed $x4
 
 if ($DryRun) {
     Head 'check only (DryRun): no copying, no config, no firewall changes'
-    Say ("  Game folder：{0}" -f $x4) 'Green'
+    Say ("  Game folder: {0}" -f $x4) 'Green'
     foreach ($n in $script:ExtNames) {
         $p = Join-Path (Join-Path $x4 'extensions') $n
         if (Test-Path -LiteralPath $p) {

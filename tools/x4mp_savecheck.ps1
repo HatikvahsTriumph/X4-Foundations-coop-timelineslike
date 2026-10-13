@@ -2,11 +2,11 @@
 <#
     x4mp_savecheck.ps1 - offline health check of an X4 save (built for X4MP station / fleet acceptance)
 
-    为什么要它：本工程的每次重要验收都靠存档取证（doc 4 §8.1 的判据就是"两端
-    `class="turret"` = 0"），而手工解压 + 数 class 每次都要花十几分钟。这个脚本
+    为什么要它: 本工程的每次重要验收都靠存档取证(doc 4 §8.1 的判据就是"两端
+    `class="turret"` = 0")，而手工解压 + 数 class 每次都要花十几分钟。这个脚本
     把那份工作变成一条命令。
 
-    用法（在 F5 存完档之后）：
+    用法(在 F5 存完档之后): 
         powershell -ExecutionPolicy Bypass -File x4mp_savecheck.ps1
             自动找最新的一份 quicksave/autosave/save_*.xml.gz
 
@@ -14,14 +14,14 @@
             指定存档
 
         powershell -ExecutionPolicy Bypass -File x4mp_savecheck.ps1 -Full
-            额外打印"受损对象"的上下文（默认只打计数与命中行）
+            额外打印"受损对象"的上下文(默认只打计数与命中行)
 
-    读什么：
-      1. class 计数：station / defencemodule / dockarea / pier / turret /
+    读什么: 
+      1. class 计数: station / defencemodule / dockarea / pier / turret /
          shieldgenerator / engine / buildstorage / production / storage / cargobay
-      2. 炮塔按宏分类计数（S3 补装是否真的插上了炮塔，看这一节）
-      3. 所有名字里带 X4MP 的对象（我们的站：X4MP STN 1/2/3）
-      4. 有 <hull> 记录的对象（受损 = 真的掉血；满血不写 hull）
+      2. 炮塔按宏分类计数(S3 补装是否真的插上了炮塔，看这一节)
+      3. 所有名字里带 X4MP 的对象(我们的站: X4MP STN 1/2/3)
+      4. 有 <hull> 记录的对象(受损 = 真的掉血；满血不写 hull)
 #>
 param(
     [string]$Save = '',
@@ -50,7 +50,7 @@ function Find-Save {
         }
     }
     if (-not $all.Count) { throw 'No save file found. Press F5 in game once, or pass -Save <path>.' }
-    # X4MP 的测试世界存档很小（几百 KB），正常宇宙存档几十 MB ⇒ 自动挑"最新的小档"，
+    # X4MP 的测试世界存档很小(几百 KB)，正常宇宙存档几十 MB ⇒ 自动挑"最新的小档"，
     # 这样在测试世界的流程里直接跑本脚本就是想要的那一份。
     $small = $all | Where-Object { $_.Length -lt 5MB } | Sort-Object LastWriteTime -Descending
     $best  = if ($small.Count) { $small[0] } else { ($all | Sort-Object LastWriteTime -Descending)[0] }
@@ -94,7 +94,7 @@ foreach ($c in $classes) {
     }
 }
 
-# ---- 2) 炮塔按宏分类（S3 验收核心）------------------------------------------
+# ---- 2) 炮塔按宏分类(S3 验收核心)------------------------------------------
 Write-Host ''
 Write-Host '  [2] turrets by macro (S3: after refitting a directly-built station this MUST be > 0)' -ForegroundColor White
 $turrets = @{}
@@ -125,7 +125,7 @@ if ($hits.Count -eq 0) {
     }
 }
 
-# ---- 4) 受损对象（<hull> 只对受损/施工中的对象写）----------------------------
+# ---- 4) 受损对象(<hull> 只对受损/施工中的对象写)----------------------------
 Write-Host ''
 Write-Host '  [4] damaged objects (an undamaged object writes no <hull>)' -ForegroundColor White
 $hull = [regex]::Matches($t, '<hull[^>]*value="[^"]+"[^>]*/?>')
@@ -133,7 +133,7 @@ Write-Host ("      <hull> records: {0}" -f $hull.Count) -ForegroundColor Gray
 $shown = 0
 $seen = @{}
 foreach ($h in $hull) {
-    # 归属：往前找最近的 class=" / macro="（存档里属性在 <hull> 之前），窗口放宽到 4 KB
+    # 归属: 往前找最近的 class=" / macro="(存档里属性在 <hull> 之前)，窗口放宽到 4 KB
     $cls = '?'; $mac = '?'
     $ci = $t.LastIndexOf('class="', $h.Index)
     if ($ci -ge 0 -and ($h.Index - $ci) -lt 4000) {
@@ -199,9 +199,9 @@ $droneMacros = [ordered]@{
 }
 $anyDrone = $false
 
-# (a) 按站归属：只有把无人机挂到"哪座站"上，才回答得了"为什么还有一座站有无人机"。
+# (a) 按站归属: 只有把无人机挂到"哪座站"上，才回答得了"为什么还有一座站有无人机"。
 #     存档里站是 <component class="station">，无人机是它机库(dockingbay)下面的
-#     <component class="ship_s">（2026-09-21 实抓：第一架紧跟 dock_gen_xs_ship_01_macro）。
+#     <component class="ship_s">(2026-09-21 实抓: 第一架紧跟 dock_gen_xs_ship_01_macro)。
 try {
     $xd = New-Object System.Xml.XmlDocument
     $xd.LoadXml($t)
@@ -233,9 +233,9 @@ try {
             $col = if ($per.Count -eq 0) { 'Gray' } else { 'Yellow' }
             Write-Host ("      {0,-16} uid={1,-10} drones in hangars {2}" -f $nm, $ids, $txt) -ForegroundColor $col
 
-            # 2026-09-21: 船厂/装备厂的"装备库存"（<ammunition><available>）是**站类型自带**的，
-            # 不走 loadout ⇒ B 路线原先漏了它（X4MP STN 3 曾实抓 fightingdrone×87 +
-            # cargodrone×24 + repairdrone×46，而 STN 1/2 为空）。修法 = MD 里
+            # 2026-09-21: 船厂/装备厂的"装备库存"(<ammunition><available>)是**站类型自带**的，
+            # 不走 loadout ⇒ B 路线原先漏了它(X4MP STN 3 曾实抓 fightingdrone×87 +
+            # cargodrone×24 + repairdrone×46，而 STN 1/2 为空)。修法 = MD 里
             # set_equipment_wares_excluded。这里直接读出来验收。
             $stockItems = $st.SelectNodes('./ammunition/available/item')
             if ($stockItems.Count -gt 0) {
@@ -253,7 +253,7 @@ try {
     Write-Host ('      (failed to resolve by station ownership: {0})' -f $_.Exception.Message) -ForegroundColor DarkYellow
 }
 
-# (b) 全局计数：loadout 单元条目 / 库存条目也要为 0（那是"能再放飞"的资本）
+# (b) 全局计数: loadout 单元条目 / 库存条目也要为 0(那是"能再放飞"的资本)
 foreach ($k in $droneMacros.Keys) {
     $ms = [regex]::Matches($t, ('<component[^>]*macro="ship_gen_[a-z0-9_]*' + $k + '[a-z0-9_]*"[^>]*>'))
     $us = [regex]::Matches($t, ('<unit[^>]*macro="ship_gen_[a-z0-9_]*' + $k + '[a-z0-9_]*"'))
@@ -275,5 +275,5 @@ Write-Host '    · station should be 3 (X4MP STN 1/2/3) and defencemodule 18 (st
 Write-Host '    · turret > 0 => the S3 refit worked; [5] $X4MPEqSeqOfficer should be 3 (a defence officer on every station)' -ForegroundColor DarkGray
 Write-Host '    · save again after attacking: [4] should show <hull> for class=defencemodule and [6] max(lastshottime) should be about your attack time' -ForegroundColor DarkGray
 Write-Host '    · [7] fightingdrone should be 0 (route B: stations carry no drones; $X4MPEqSeqNoDrones=1 confirms)' -ForegroundColor DarkGray
-Write-Host '    · [7] 的"装备库存"（船厂/装备厂特有）也应为空：修前 STN 3 有 fightingdrone×87 —— 那是站类型自带、不走 loadout，靠 MD 的 set_equipment_wares_excluded 清掉' -ForegroundColor DarkGray
+Write-Host '    · [7] 的"装备库存"(船厂/装备厂特有)也应为空: 修前 STN 3 有 fightingdrone×87 —— 那是站类型自带、不走 loadout，靠 MD 的 set_equipment_wares_excluded 清掉' -ForegroundColor DarkGray
 Write-Host ''
