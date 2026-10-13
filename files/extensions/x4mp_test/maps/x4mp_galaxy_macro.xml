@@ -1,0 +1,77 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!--
+  A minimal, self-contained "blank universe": one galaxy -> one cluster ->
+  one sector -> one zone, with nothing else in it.
+
+  This mirrors the base game's own "empty" tutorial galaxy
+  (maps/basegame_map_tutorial_default_empty_galaxy_macro.xml), which is the
+  simplest valid universe definition X4 ships.
+
+  Hierarchy:
+    x4mp_galaxy_macro
+      └─ x4mp_cluster_01_macro
+           └─ x4mp_cluster_01_sector_01_macro
+                └─ x4mp_cluster_01_sector_01_zone_01_macro   <- player spawns here
+-->
+<macros>
+  <!-- ===== zone: the "room" ships fly in ===== -->
+  <macro name="x4mp_cluster_01_sector_01_zone_01_macro">
+    <component ref="standardzone" connection="sector" />
+    <properties>
+      <identification name="{20006,601}" />
+    </properties>
+  </macro>
+
+  <!-- ===== sector ===== -->
+  <!-- ★2026-09-26：关卡（x4mp_level_boron）也挂在这个私有星系里 ⇒ 舞台上只有我们的演员，
+       原版沙盒（民用船/巡逻/原版空间站/其它星系舰队）**完全不存在**。
+       星区显示名改用我们自己的文本页：{100002,20} = "梦幻海洋"（见 t/0001-l086.xml / l044）。 -->
+  <macro name="x4mp_cluster_01_sector_01_macro">
+    <component ref="standardsector" connection="cluster" />
+    <properties>
+      <identification name="{100002,20}" description="{100002,21}" />
+    </properties>
+    <connections>
+      <connection name="x4mp_zone_01_connection" ref="zones">
+        <macro ref="x4mp_cluster_01_sector_01_zone_01_macro" connection="sector" />
+      </connection>
+    </connections>
+  </macro>
+
+  <!-- ===== cluster ===== -->
+  <macro name="x4mp_cluster_01_macro">
+    <component ref="standardcluster" connection="galaxy" />
+    <properties>
+      <identification name="{20003,300001}" description="{20003,300002}" />
+    </properties>
+    <connections>
+      <connection name="x4mp_sector_01_connection" ref="sectors">
+        <macro ref="x4mp_cluster_01_sector_01_macro" connection="cluster" />
+      </connection>
+      <!-- "content" links this cluster to a renderable space (visual background).
+           "cluster_30" is a base-game empty-space cluster, same as the empty tutorial. -->
+      <connection name="content" ref="content">
+        <macro>
+          <component connection="space" ref="cluster_30" />
+        </macro>
+      </connection>
+    </connections>
+  </macro>
+
+  <!-- ===== galaxy (the universe root) ===== -->
+  <macro name="x4mp_galaxy_macro">
+    <component ref="standardgalaxy" />
+    <connections>
+      <connection name="x4mp_cluster_01_connection" ref="clusters">
+        <macro ref="x4mp_cluster_01_macro" connection="galaxy" />
+      </connection>
+      <!-- ===== ★真实 Boron 集群：真实星区「梦幻海洋」（cluster_604_sector001）就在这里 =====
+           只挂这一个**真实**集群 ⇒ 舞台上是**原版那个星区本身**（真实几何 / 外观 / zone001..004），
+           而星系里没有别的集群、也没有派系归属 ⇒ 原版沙盒不会在此生成
+           （民用船 / 巡逻 / 原版空间站 / 其它星系舰队）。 -->
+      <connection name="x4mp_boron_cluster_connection" ref="clusters">
+        <macro ref="cluster_604_macro" connection="galaxy" />
+      </connection>
+    </connections>
+  </macro>
+</macros>

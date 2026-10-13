@@ -1,0 +1,909 @@
+<?xml version="1.0" encoding="utf-8"?>
+<mdscript name="X4MP_TestWorld" xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance" xsi:noNamespaceSchemaLocation="md.xsd">
+  <cues>
+
+    <!--
+      Spawn a second ship (the "script ship") near the player.
+      This ship has NO pilot, so it has no AI behavior — it is a
+      blank ship that we will control externally.
+    -->
+    <cue name="X4MP_SpawnScriptShip" module="x4mp_blank">
+      <conditions>
+        <event_game_started />
+      </conditions>
+      <actions>
+        <debug_text text="'X4MP: spawning script ship'" chance="100" />
+
+        <!-- STATION WORLD ISOLATION (doc 4, section 2.2): declare this world as
+             the NPC/AI world. X4MP_SpawnNpc below refuses to build the fleet
+             without this flag, and md\x4mp_stations.xml never sets it. The
+             switch has to live here because the host DLL raises x4mp_spawn_npc
+             on EVERY game load (x4mp_native.cpp, on_game_loaded) and has no
+             idea which gamestart it is running in. -->
+        <set_value name="global.$X4MPNpcWorld" exact="true" />
+
+        <!-- Create the ship WITHOUT a <pilot> tag => no AI. -->
+        <!-- Spawn at a FIXED, known offset from the player (world -Z, 5 km)
+             so we can locate its transform deterministically. -->
+        <create_position name="$GhostPos" object="player.entity" space="player.sector" x="0" y="0" z="-5000" />
+        <create_ship name="$ScriptShip" macro="macro.ship_arg_s_fighter_01_a_macro" sector="player.sector">
+          <owner exact="faction.player" />
+          <position value="$GhostPos" />
+        </create_ship>
+
+        <!-- Make it visible / known to the player -->
+        <set_known object="$ScriptShip" known="true" />
+
+        <!-- Give it a distinct name so it's clearly the "ghost" ship, not the player's -->
+        <set_object_name object="$ScriptShip" name="'X4MP Ghost'" />
+
+        <!-- Store the ghost ship in an MD global so the network-sync cue
+             (below) can reference and warp it from a different cue. -->
+        <set_value name="global.$X4MPGhostShip" exact="$ScriptShip" />
+
+        <!-- 2026-09-21: THE STATIC "X4MP Target" TEST SHIP IS GONE (user request).
+             It was created here as a Xenon S fighter 2 km ahead of spawn, named
+             "X4MP Target" and stored in global.$X4MPTargetShip, so the old damage test
+             had a deterministic victim. The fleet's own ships and the Xenon K (lid 21)
+             now serve that purpose, and X4MP_SelfDamage no longer dereferences the target
+             ship at all - it applies every incoming damage packet to player.entity.
+             Do not re-add a ship here without re-adding both branches in X4MP_SelfDamage
+             (a null global inside a <do_if> condition is what makes such a ship
+             "mandatory": this project has already paid for that lesson twice). -->
+
+        <debug_text text="'X4MP: script ship created'" chance="100" />
+      </actions>
+
+    </cue>
+
+    <!-- ============================================================
+         NETWORK SYNC
+         Receives remote-player positions from the injected DLL.
+         The DLL executes (via the Lua bridge):
+             AddUITriggeredEvent('X4MP_GhostSync','move',{x,y,z})
+         MD reads event.param3.{1/2/3} and warps the ghost ship there.
+         ============================================================ -->
+    <cue name="X4MP_NetworkSync">
+      <conditions>
+        <event_ui_triggered screen="'X4MP_GhostSync'" control="'move'" />
+      </conditions>
+      <actions>
+        <set_value name="$nx" exact="event.param3.{1}" />
+        <set_value name="$ny" exact="event.param3.{2}" />
+        <set_value name="$nz" exact="event.param3.{3}" />
+        <!-- NULL GUARD (doc 4 section 2.2b, found in run #20-A 2026-09-17 22:11)
+             This cue carries no module attribute on purpose (invariant I3), so it
+             runs in the station world too - where the ghost is built by
+             md\x4mp_stations.xml at event_game_started, i.e. ~3 s AFTER the DLL
+             raised its first X4MP_GhostSync/move (ON_GAME_LOADED 22:11:28.57 vs
+             game_started 22:11:31.35, client 1002). An unguarded <warp> throws in
+             that window: "Property lookup failed: global.$X4MPGhostShip" and, once
+             the global holds a destroyed ship, "Evaluated value 'null' is not of
+             type component" - the blank world has had that second form since run
+             #17 (gs=77 20:47:11), so this is a pre-existing race, not a station bug.
+             Behaviour-neutral where the ghost exists: the <reset_cue> stays OUTSIDE
+             the guard, so the cue re-arms as before and the first packet after the
+             carrier exists is warped. -->
+        <do_if value="global.$X4MPGhostShip?">
+          <do_if value="global.$X4MPGhostShip.exists">
+            <warp object="global.$X4MPGhostShip" sector="player.sector">
+              <position x="$nx" y="$ny" z="$nz" />
+            </warp>
+            <debug_text text="'X4MP: network warp applied'" chance="100" />
+          </do_if>
+        </do_if>
+        <!-- Re-arm this cue so it can fire again on the next event. -->
+        <reset_cue cue="X4MP_NetworkSync" />
+      </actions>
+    </cue>
+
+    <!-- GHOST ROTATE（★2026-09-28 run #26c，用户要求"把转向功能添加进来"）。
+         bridge 每帧发的第 4/5/6 个数就是 yaw/pitch/roll（x4mp_bridge.lua 的 on_move），
+         以前只有位置被应用 ⇒ 幽灵朝向永远不动。
+         写法照抄本文件 X4MP_NpcDriveStep 里 run #4/#5 已实证的
+         `<warp><position/><rotation .../></warp>`（唯一被证明过的姿态写法）✓
+         ⚠️ 刻意做成**独立 cue**：万一 <rotation> 的某个属性不被接受，抛错只影响这一条 cue，
+            位置同步（X4MP_NetworkSync）照旧；两条 cue 都监听同一事件、各自 reset_cue ✓ -->
+    <cue name="X4MP_GhostRotate">
+      <conditions>
+        <event_ui_triggered screen="'X4MP_GhostSync'" control="'move'" />
+      </conditions>
+      <actions>
+        <do_if value="global.$X4MPGhostShip?">
+          <do_if value="global.$X4MPGhostShip.exists">
+            <!-- 先拷贝进 cue 局部变量：证实过的写法只喂局部变量（见 NpcDriveStep 的长注释） -->
+            <set_value name="$rx" exact="event.param3.{1}" />
+            <set_value name="$ry" exact="event.param3.{2}" />
+            <set_value name="$rz" exact="event.param3.{3}" />
+            <!-- ★2026-09-28（run #26i）**角度单位修正**：
+                 Lua 送来的第 4/5/6 个数是"度"的数（tonumber 结果**无单位**），而 MD 的
+                 <rotation> 需要角度量 —— 项目里已验证的形式是 `45deg` / `$yaw + 5deg`
+                 （见本文件 X4MP_NpcDriveStep）。无单位的纯数字会被按**弧度**解释 ⇒
+                 3.14 变 180°、1.5 变 86° ⇒ 表现就是"沿一个轴心上下左右翻滚、不是正常转向"。
+                 修法：乘 `1deg` 显式转成角度量 ✓ -->
+            <set_value name="$ryawDeg"   exact="event.param3.{4} * 1deg" />
+            <set_value name="$rpitchDeg" exact="event.param3.{5} * 1deg" />
+            <set_value name="$rrollDeg"  exact="event.param3.{6} * 1deg" />
+            <warp object="global.$X4MPGhostShip" sector="player.sector">
+              <position x="$rx" y="$ry" z="$rz" />
+              <rotation yaw="$ryawDeg" pitch="$rpitchDeg" roll="$rrollDeg" />
+            </warp>
+          </do_if>
+        </do_if>
+        <reset_cue cue="X4MP_GhostRotate" />
+      </actions>
+    </cue>
+
+    <!-- GHOST DESTROY: remote ship died -> remove the local ghost.
+         ★2026-09-28（run #26c，用户实测反馈）：explosion 由 true 改成 **false**。
+         原因：幽灵只是"对端玩家的镜像"，它在主机世界里被引爆（用户原话："一开始主机这边
+         还是先爆炸了一艘幽灵船，然后客户端连接上后又创建了正确的幽灵船"）既误导又难看 ——
+         爆炸看起来像"对方的船炸了"。改成静默移除后，幽灵会直接消失，随后由 0.15 的幽灵 cue
+         在对端 macro 明确后重建出正确的那一艘（用户要求的语义）✓
+         ⚠️ NPC 傀儡的死亡仍然用真实爆炸（那是真的战斗），只有这条"镜像对象"走静默。 -->
+    <cue name="X4MP_GhostDestroy" instantiate="true">
+      <conditions>
+        <event_ui_triggered screen="'X4MP_GhostSync'" control="'destroy'" />
+      </conditions>
+      <actions>
+        <destroy_object object="global.$X4MPGhostShip" explosion="false" />
+      </actions>
+    </cue>
+
+    <!-- DAMAGE RELAY (incoming): remote dealt percent damage to our ghost on
+         their side -> convert percent to absolute and apply to our real ship. -->
+    <cue name="X4MP_SelfDamage">
+      <conditions>
+        <event_ui_triggered screen="'X4MP_SelfSync'" control="'damage'" />
+      </conditions>
+      <actions>
+        <!-- 2026-09-21: the static "X4MP Target" ship is GONE, so this cue no longer has two
+             destinations. The DLL's damage lane reports targetType 0 (the peer-hero replica
+             on the other side) or 1 (that target ship); with the ship removed it can only
+             ever be 0, and the branch that used to address the target ship would have
+             dereferenced a null global on every packet. The damage therefore always goes to
+             player.entity - the ship the player is actually flying, which is exactly what
+             "the peer hit my hero" means. The apply_attackstrength factor is the same
+             percent -> absolute conversion as before. -->
+        <do_if value="player.ship? and event.param3.{2} gt 0 and player.ship.hullpercentage gt 0">
+          <set_value name="$X4MPHullFactor" exact="player.ship.hull / player.ship.hullpercentage" />
+          <apply_attackstrength object="player.ship"
+                                hullshield="0"
+                                hullonly="event.param3.{2} * $X4MPHullFactor"
+                                shieldonly="0"
+                                hullnoshield="0" />
+        </do_if>
+        <do_if value="player.ship? and event.param3.{1} gt 0 and player.ship.shieldpercentage gt 0">
+          <set_value name="$X4MPShieldFactor" exact="player.ship.shield / player.ship.shieldpercentage" />
+          <apply_attackstrength object="player.ship"
+                                hullshield="0"
+                                hullonly="0"
+                                shieldonly="event.param3.{1} * $X4MPShieldFactor"
+                                hullnoshield="0" />
+        </do_if>
+        <reset_cue cue="X4MP_SelfDamage" />
+      </actions>
+    </cue>
+
+    <!-- ============================================================
+         HOST: locally create a handful of NPC ships (hostile + neutral)
+         so they can be enumerated and broadcast to the client.
+         ============================================================ -->
+    <cue name="X4MP_SpawnNpc" instantiate="true">
+      <conditions>
+        <event_ui_triggered screen="'X4MP_NpcSync'" control="'spawn'" />
+      </conditions>
+      <actions>
+        <!-- STATION WORLD ISOLATION (doc 4, section 2.2): the host DLL triggers
+             this cue in every gamestart - x4mp_spawn_npc is raised from
+             on_game_loaded's NPC stage, which never looks at the gamestart.
+             Only the blank world's X4MP_SpawnScriptShip sets
+             global.$X4MPNpcWorld, so the 131-ship fleet is built there and
+             nowhere else. The body below keeps its original indentation on
+             purpose: re-indenting 1500 lines would bury this two-line change. -->
+        <do_if value="global.$X4MPNpcWorld?">
+        <!-- The stage-1/stage-2 comment block that stood here (10 NPCs split A/B, then
+             +90 for the 100-ship stress grid) was retired on 2026-09-21 together with the
+             fleet it described; its still-true half - the five P1 lanes of ids 6..10 - is
+             spelled out in the fleet comment below. History lives in doc 3 sections 10.7
+             and 10.7d; the fleet itself is hand-written now (x4mp_stage2_md.ps1 /
+             x4mp_stage3_md.ps1 must NOT be re-run: they would rebuild the 131-ship rig). -->
+        <!-- ===== 2026-09-21: THE 21-SHIP PLAYABLE FLEET (the 131-ship A/B rig retires) =====
+             The old fleet (50 A + 50 B + 10 XEN + 20 ARG arena + 1 XL rig) was what runs
+             #11..#20 measured. What it also is: heavy enough that two instances on one
+             machine steal each other's frame rate. Requested replacement (2026-09-21):
+                 1x Xenon K  - macro.ship_xen_xl_destroyer_01_a_macro
+                               wares.xml id ship_xen_xl_destroyer_01_a -> name {20101,70501} = "K"
+                               (the old comment here called this macro "the I"; that was wrong -
+                                the I is ship_xen_xl_carrier_01_a, {20101,70601})
+                20x Argon M - 12x macro.ship_arg_m_frigate_01_a_macro  (Cerberus, {20101,10602})
+                               8x macro.ship_arg_m_bomber_01_a_macro   (Minotaur, {20101,10503})
+             and the static "X4MP Target" test ship is GONE (its create_ship block, its global
+             and the two X4MP_SelfDamage branches that dereferenced it).
+
+             GROUPING: every lid is group B - kGroupALastLid is 0 in x4mp_native.cpp, so the
+             client freezes its puppets (order_wait) and steers them from the host's P1
+             snapshots. The A "control" group retires with this fleet: a control group is
+             measured, not played with, and its measurement was the 100-ship stress run.
+             Ids 6..10 keep the MD-warped P1 lanes, so the SUMMARY line still carries five
+             probes with real motion (they are the P1 path's actual evidence).
+
+             ORDERS / PILOTS (run #6: a ship with neither pilot nor order runs NO AI at all):
+               lid 1..5    Argon M, formation ahead of spawn, Patrol (moves, does not hunt)
+               lid 6..10   Argon M, NO order - the MD driver below warps them (P1 lanes)
+               lid 11..20  Argon M, formation, Patrol (moves, does not hunt)
+               lid 21      Xenon K, NO pilot and NO order: a passive, unarmed-shaped
+                           silhouette that holds its pose forever (see its own comment)
+             Geometry keeps the old separation: the patrolling wing sits at x = 4..5.4 km,
+             the P1 lanes run over x = 0.8..5.8 km / z = 0.8..-4 km, the K is 24 km out.
+
+             LOADOUTS: the Argon wing carries the engine's FACTION DEFAULT - no <loadout>
+             element, exactly as the old Argon fleet did, so both peers generate the same
+             default items from the same faction in the same game version. The K carries the
+             explicit two-macro rig (one engine, one shield, no weapons) plus the "[RIG]"
+             name marker that makes the client build the same thing (kSpawnFlagRigLoadout).
+             ======================================================================= -->
+        <create_ship name="$npc1" macro="macro.ship_arg_m_frigate_01_a_macro" sector="player.sector">
+          <owner exact="faction.argon" overridenpc="true" />
+          <pilot macro="character_argon_male_pilot_01_macro" />
+          <position x="4000" y="0" z="-4000" />
+        </create_ship>
+        <create_ship name="$npc2" macro="macro.ship_arg_m_frigate_01_a_macro" sector="player.sector">
+          <owner exact="faction.argon" overridenpc="true" />
+          <pilot macro="character_argon_male_pilot_01_macro" />
+          <position x="4000" y="0" z="-3300" />
+        </create_ship>
+        <create_ship name="$npc3" macro="macro.ship_arg_m_frigate_01_a_macro" sector="player.sector">
+          <owner exact="faction.argon" overridenpc="true" />
+          <pilot macro="character_argon_male_pilot_01_macro" />
+          <position x="4000" y="0" z="-2600" />
+        </create_ship>
+        <create_ship name="$npc4" macro="macro.ship_arg_m_frigate_01_a_macro" sector="player.sector">
+          <owner exact="faction.argon" overridenpc="true" />
+          <pilot macro="character_argon_male_pilot_01_macro" />
+          <position x="4000" y="0" z="-1900" />
+        </create_ship>
+        <create_ship name="$npc5" macro="macro.ship_arg_m_frigate_01_a_macro" sector="player.sector">
+          <owner exact="faction.argon" overridenpc="true" />
+          <pilot macro="character_argon_male_pilot_01_macro" />
+          <position x="4000" y="0" z="-1200" />
+        </create_ship>
+        <!-- the five P1 probes: same lane positions the driver below has always used
+             (>=200 m apart, so no warp can land on another hull) -->
+        <create_ship name="$npc6" macro="macro.ship_arg_m_frigate_01_a_macro" sector="player.sector">
+          <owner exact="faction.argon" overridenpc="true" />
+          <pilot macro="character_argon_male_pilot_01_macro" />
+          <position x="800" y="-200" z="0" />
+        </create_ship>
+        <create_ship name="$npc7" macro="macro.ship_arg_m_frigate_01_a_macro" sector="player.sector">
+          <owner exact="faction.argon" overridenpc="true" />
+          <pilot macro="character_argon_male_pilot_01_macro" />
+          <position x="800" y="200" z="0" />
+        </create_ship>
+        <create_ship name="$npc8" macro="macro.ship_arg_m_frigate_01_a_macro" sector="player.sector">
+          <owner exact="faction.argon" overridenpc="true" />
+          <pilot macro="character_argon_male_pilot_01_macro" />
+          <position x="2000" y="0" z="800" />
+        </create_ship>
+        <create_ship name="$npc9" macro="macro.ship_arg_m_frigate_01_a_macro" sector="player.sector">
+          <owner exact="faction.argon" overridenpc="true" />
+          <pilot macro="character_argon_male_pilot_01_macro" />
+          <position x="3000" y="-600" z="0" />
+        </create_ship>
+        <create_ship name="$npc10" macro="macro.ship_arg_m_frigate_01_a_macro" sector="player.sector">
+          <owner exact="faction.argon" overridenpc="true" />
+          <pilot macro="character_argon_male_pilot_01_macro" />
+          <position x="3000" y="600" z="0" />
+        </create_ship>
+        <create_ship name="$npc11" macro="macro.ship_arg_m_frigate_01_a_macro" sector="player.sector">
+          <owner exact="faction.argon" overridenpc="true" />
+          <pilot macro="character_argon_male_pilot_01_macro" />
+          <position x="4700" y="0" z="-2600" />
+        </create_ship>
+        <create_ship name="$npc12" macro="macro.ship_arg_m_frigate_01_a_macro" sector="player.sector">
+          <owner exact="faction.argon" overridenpc="true" />
+          <pilot macro="character_argon_male_pilot_01_macro" />
+          <position x="4700" y="0" z="-1200" />
+        </create_ship>
+        <!-- the eight bombers: second formation, 1.4 km to starboard -->
+        <create_ship name="$npc13" macro="macro.ship_arg_m_bomber_01_a_macro" sector="player.sector">
+          <owner exact="faction.argon" overridenpc="true" />
+          <pilot macro="character_argon_male_pilot_01_macro" />
+          <position x="5400" y="0" z="-4000" />
+        </create_ship>
+        <create_ship name="$npc14" macro="macro.ship_arg_m_bomber_01_a_macro" sector="player.sector">
+          <owner exact="faction.argon" overridenpc="true" />
+          <pilot macro="character_argon_male_pilot_01_macro" />
+          <position x="5400" y="0" z="-3300" />
+        </create_ship>
+        <create_ship name="$npc15" macro="macro.ship_arg_m_bomber_01_a_macro" sector="player.sector">
+          <owner exact="faction.argon" overridenpc="true" />
+          <pilot macro="character_argon_male_pilot_01_macro" />
+          <position x="5400" y="0" z="-2600" />
+        </create_ship>
+        <create_ship name="$npc16" macro="macro.ship_arg_m_bomber_01_a_macro" sector="player.sector">
+          <owner exact="faction.argon" overridenpc="true" />
+          <pilot macro="character_argon_male_pilot_01_macro" />
+          <position x="5400" y="0" z="-1900" />
+        </create_ship>
+        <create_ship name="$npc17" macro="macro.ship_arg_m_bomber_01_a_macro" sector="player.sector">
+          <owner exact="faction.argon" overridenpc="true" />
+          <pilot macro="character_argon_male_pilot_01_macro" />
+          <position x="6100" y="0" z="-4000" />
+        </create_ship>
+        <create_ship name="$npc18" macro="macro.ship_arg_m_bomber_01_a_macro" sector="player.sector">
+          <owner exact="faction.argon" overridenpc="true" />
+          <pilot macro="character_argon_male_pilot_01_macro" />
+          <position x="6100" y="0" z="-3300" />
+        </create_ship>
+        <create_ship name="$npc19" macro="macro.ship_arg_m_bomber_01_a_macro" sector="player.sector">
+          <owner exact="faction.argon" overridenpc="true" />
+          <pilot macro="character_argon_male_pilot_01_macro" />
+          <position x="6100" y="0" z="-2600" />
+        </create_ship>
+        <create_ship name="$npc20" macro="macro.ship_arg_m_bomber_01_a_macro" sector="player.sector">
+          <owner exact="faction.argon" overridenpc="true" />
+          <pilot macro="character_argon_male_pilot_01_macro" />
+          <position x="6100" y="0" z="-1900" />
+        </create_ship>
+        <!-- Names carry the logical id (the DLL parses the trailing number) and the list
+             is appended in ascending id order, so list index == logical id on BOTH peers
+             (the iron rule of doc 3 section 10.8l.8: one missing append shifts every
+             later lid by one). -->
+        <set_object_name object="$npc1" name="'X4MP NPC 1'" />
+        <append_to_list name="global.$X4MPNpcList" exact="$npc1" create="true" />
+        <set_object_name object="$npc2" name="'X4MP NPC 2'" />
+        <append_to_list name="global.$X4MPNpcList" exact="$npc2" create="true" />
+        <set_object_name object="$npc3" name="'X4MP NPC 3'" />
+        <append_to_list name="global.$X4MPNpcList" exact="$npc3" create="true" />
+        <set_object_name object="$npc4" name="'X4MP NPC 4'" />
+        <append_to_list name="global.$X4MPNpcList" exact="$npc4" create="true" />
+        <set_object_name object="$npc5" name="'X4MP NPC 5'" />
+        <append_to_list name="global.$X4MPNpcList" exact="$npc5" create="true" />
+        <set_object_name object="$npc6" name="'X4MP NPC 6'" />
+        <append_to_list name="global.$X4MPNpcList" exact="$npc6" create="true" />
+        <set_object_name object="$npc7" name="'X4MP NPC 7'" />
+        <append_to_list name="global.$X4MPNpcList" exact="$npc7" create="true" />
+        <set_object_name object="$npc8" name="'X4MP NPC 8'" />
+        <append_to_list name="global.$X4MPNpcList" exact="$npc8" create="true" />
+        <set_object_name object="$npc9" name="'X4MP NPC 9'" />
+        <append_to_list name="global.$X4MPNpcList" exact="$npc9" create="true" />
+        <set_object_name object="$npc10" name="'X4MP NPC 10'" />
+        <append_to_list name="global.$X4MPNpcList" exact="$npc10" create="true" />
+        <set_object_name object="$npc11" name="'X4MP NPC 11'" />
+        <append_to_list name="global.$X4MPNpcList" exact="$npc11" create="true" />
+        <set_object_name object="$npc12" name="'X4MP NPC 12'" />
+        <append_to_list name="global.$X4MPNpcList" exact="$npc12" create="true" />
+        <set_object_name object="$npc13" name="'X4MP NPC 13'" />
+        <append_to_list name="global.$X4MPNpcList" exact="$npc13" create="true" />
+        <set_object_name object="$npc14" name="'X4MP NPC 14'" />
+        <append_to_list name="global.$X4MPNpcList" exact="$npc14" create="true" />
+        <set_object_name object="$npc15" name="'X4MP NPC 15'" />
+        <append_to_list name="global.$X4MPNpcList" exact="$npc15" create="true" />
+        <set_object_name object="$npc16" name="'X4MP NPC 16'" />
+        <append_to_list name="global.$X4MPNpcList" exact="$npc16" create="true" />
+        <set_object_name object="$npc17" name="'X4MP NPC 17'" />
+        <append_to_list name="global.$X4MPNpcList" exact="$npc17" create="true" />
+        <set_object_name object="$npc18" name="'X4MP NPC 18'" />
+        <append_to_list name="global.$X4MPNpcList" exact="$npc18" create="true" />
+        <set_object_name object="$npc19" name="'X4MP NPC 19'" />
+        <append_to_list name="global.$X4MPNpcList" exact="$npc19" create="true" />
+        <set_object_name object="$npc20" name="'X4MP NPC 20'" />
+        <append_to_list name="global.$X4MPNpcList" exact="$npc20" create="true" />
+
+        <!-- ===== 2026-09-21 (late): THE WING HOLDS POSITION - the Patrol orders are GONE =====
+             Why they had to go, measured on the first dual-machine run (host log
+             17:42-17:52 UTC):
+               * `P2 relay ... fires(sent/recv)=1945/0` - our 20 Argon M ships opened
+                 fire ~20 s after the world was released and kept firing;
+               * `host sync alive=21` became `alive=20`: THE XENON K WAS KILLED.
+                 It has no pilot (so it cannot shoot back) and no order, and one M wing
+                 with the faction's default loadout simply eats it. A test world whose
+                 capital ship dies two minutes in is not the world this fleet is for.
+               * and on the client, a moving wing is the expensive case: every puppet
+                 that keeps moving forces an engine write-back per frame (see the
+                 kPuppetDeadband budget in x4mp_native.cpp).
+             With no order at all, each ship holds the pose it was created at - exactly
+             what the old B-group probes (lids 6..10) have always done - so:
+               1. nothing hunts the K (it stays as the landmark/large target),
+               2. the client's puppet cost collapses to the five warped probes,
+               3. the P1 path keeps real motion: lids 6..10 are STILL driven by
+                  X4MP_NpcDriveStep, which is the measurement that matters.
+             SWITCH BACK TO A FIGHTING WING (the K will die within a few minutes):
+             give lids 1-5 and 11-20 an order again -
+             - and, if the fight should last, arm + pilot the K as described in its
+             own comment further down (scenario_combat_xen_destroyer). -->
+
+        <!-- ===== lid 21: the Xenon K =====
+             macro.ship_xen_xl_destroyer_01_a_macro IS the K - wares.xml id
+             ship_xen_xl_destroyer_01_a carries name {20101,70501} = "K". The old comment
+             in this file called that macro "the I"; the I is ship_xen_xl_carrier_01_a
+             ({20101,70601}). Parked 24 km out, so it is a landmark rather than a neighbour.
+
+             UNARMED ON PURPOSE, enforced by construction rather than by luck:
+             <loadout macros="[...]"> REPLACES the faction default item source (common.xsd
+             on loadout: "A list of macros from which the loadout should be generated. If
+             neither basket, wares nor macros are provided, default items for faction will
+             be used"), and the list below holds one engine and one shield - there is no
+             weapon or turret macro for the generator to install.
+             SWITCH to a stock-armed, hunting K (a real fight for the Argon wing):
+               1. replace this <loadout> block with <loadout ref="scenario_combat_xen_destroyer" />
+                  (that vanilla loadout is defined FOR this very macro: libraries/loadouts.xml:614)
+               2. add <pilot macro="character_argon_male_pilot_01_macro" /> and a
+                  <create_order id="'Patrol'"> with <param name="pursuetargets" value="true" />
+             Both peers still build the same ship: the client's mirror of this loadout is
+             the "$rflags gt 0" branch of X4MP_SpawnRemote below.
+
+             NO <pilot> AND NO ORDER: a ship with no control entity has no AI to fly it, so
+             it holds this pose forever - which is exactly what makes it a stable, huge
+             target for the P2Fx probes and for a damage/kill drill. -->
+        <create_ship name="$npc21" macro="macro.ship_xen_xl_destroyer_01_a_macro" sector="player.sector">
+          <owner exact="faction.xenon" />
+          <loadout macros="[macro.engine_xen_xl_allround_01_mk1_macro, macro.shield_xen_xl_standard_01_mk1_macro]">
+            <level exact="1" />
+            <variation exact="0" />
+          </loadout>
+          <position x="9500" y="0" z="24000" />
+        </create_ship>
+        <!-- 10.8l: the "[RIG]" suffix is the declared channel that tells the DLL this ship
+             carries the rig loadout (no weapons); the DLL turns it into
+             kSpawnFlagRigLoadout for the client. parse_npc_tag stops at the '[', so the
+             name still reads back as logical id 21. -->
+        <set_object_name object="$npc21" name="'X4MP NPC 21 [RIG]'" />
+        <append_to_list name="global.$X4MPNpcList" exact="$npc21" create="true" />
+        <set_known object="$npc21" known="true" />
+        <!-- The rig's own macro, printed: how the host proves what the client must copy
+             (the client's log prints what it built). -->
+        <debug_text text="'X4MP fleet: lid 21 (Xenon K) macro=' + $npc21.macro" chance="100" />
+
+        <!-- Hand the five P1 ships to the driver as plain object references. Indexing a
+             global list with a literal (global.$X4MPNpcList.{6}) is not an idiom the
+             vanilla scripts use - dedicated globals cannot go wrong. The driver is NOT
+             armed here: X4MP_UniverseGo arms it on the frame the client reports that it
+             has built the whole world. -->
+        <set_value name="global.$X4MPNpc6"  exact="$npc6" />
+        <set_value name="global.$X4MPNpc7"  exact="$npc7" />
+        <set_value name="global.$X4MPNpc8"  exact="$npc8" />
+        <set_value name="global.$X4MPNpc9"  exact="$npc9" />
+        <set_value name="global.$X4MPNpc10" exact="$npc10" />
+
+        <debug_text text="'X4MP: NPCs spawned (host, 21 = 20 ARG M + 1 XEN K), world HELD for the peer'" chance="100" />
+        </do_if>
+      </actions>
+    </cue>
+
+    <!-- ============================================================
+         BOTH PEERS (doc 3, section 10.8l): THE WORLD IS RELEASED.
+
+         Raised by x4mp_bridge.lua from the DLL's "x4mp_universe_go" event, which
+         fires on both peers at the same moment - on the host when the client
+         reports that every puppet of the announced world stands, on the client when
+         the host's WORLD_GO row arrives. One cue, two peers, one instant.
+
+         2026-09-21: the A group is RETIRED with the 21-ship fleet (kGroupALastLid = 0,
+         all group B), so the <do_if> below is INERT - global.$X4MPNpcA is never created
+         by either peer any more. It is kept deliberately: it is the re-entry point if
+         the control group is ever revived, and the `?` guard means an absent list costs
+         nothing. What still matters in this cue is the P1 driver arming below: both
+         peers must start their motion on the same instant, or the `err` numbers of the
+         five probes compare two different timelines.
+         ============================================================ -->
+    <cue name="X4MP_UniverseGo" instantiate="true">
+      <conditions>
+        <event_ui_triggered screen="'X4MP_NpcSync'" control="'go'" />
+      </conditions>
+      <actions>
+        <do_if value="global.$X4MPNpcA?">
+          <do_for_each name="$aShip" in="global.$X4MPNpcA">
+            <create_order id="'Patrol'" object="$aShip" default="true">
+              <param name="space" value="player.sector" />
+            </create_order>
+          </do_for_each>
+        </do_if>
+        <!-- Host only: the driver's objects are the cue-local $npc6..$npc10 of
+             X4MP_SpawnNpc, stored as globals there. On the client those globals do
+             not exist, so the ? test skips this block - which is exactly what has
+             to happen, since the client's puppets must only ever move through the
+             P1 snapshot + write-back path under test. -->
+        <do_if value="global.$X4MPNpc6?">
+          <set_value name="global.$X4MPDriveX"    exact="800" />
+          <set_value name="global.$X4MPDriveDir"  exact="1" />
+          <set_value name="global.$X4MPDriveZ"    exact="800" />
+          <set_value name="global.$X4MPDriveZDir" exact="-1" />
+          <set_value name="global.$X4MPYaw6"  exact="0deg" />
+          <set_value name="global.$X4MPYaw7"  exact="0deg" />
+          <set_value name="global.$X4MPYaw8"  exact="0deg" />
+          <set_value name="global.$X4MPYaw9"  exact="0deg" />
+          <set_value name="global.$X4MPYaw10" exact="0deg" />
+          <set_value name="global.$X4MPDriveStep" exact="0" />
+          <set_value name="global.$X4MPDriveActive" exact="true" />
+          <!-- Kick the self-rearming ticker declared below. -->
+          <reset_cue cue="X4MP_NpcDriveStep" />
+          <debug_text text="'X4MP: P1 drive armed (host)'" chance="100" />
+        </do_if>
+        <debug_text text="'X4MP: WORLD RELEASED - A group ordered, driver armed'" chance="100" />
+      </actions>
+    </cue>
+
+    <!-- ============================================================
+         P1 TEST DRIVER - host only (armed by X4MP_UniverseGo, doc 3 10.8l).
+
+         Without motion the whole P1 path is untestable: ships that never leave
+         their spawn point produce err=0.0m no matter whether the write-back /
+         the interpolation / the freeze actually work. So the five B ships are
+         driven every step, each on its own axis and rate:
+           id 6  X 800 <-> 5800 m at y=-200, yaw +5deg/step
+           id 7  X 800 <-> 5800 m at y=+200, yaw -5deg/step  (opposite wrap)
+           id 8  Z 800 <-> -4000 m at x=2000, yaw +3deg/step  (axis probe)
+           id 9  fixed (3000,-600,0),         yaw +2deg/step   (slow rotation)
+           id 10 fixed (3000,+600,0),         yaw +10deg/step  (fast rotation)
+         One step is one X frame, not 0.1 s of wall time (the ticker is
+         quantized to a frame), so at the observed ~7 fps this is ~175 m/s.
+
+         PACING: <delay> is a CUE-LEVEL element. md.xsd group "cue" is
+         conditions?, delay?, actions... - delay is NOT part of the conditions
+         group, and 0 of the 1635 <delay> elements in the vanilla md scripts sit
+         inside <conditions> (765 sit right after </conditions>, 870 right after
+         <cue name=...>). Run #3 (2026-09-13 17:45) had it inside <conditions>,
+         so this cue never ticked: the driven ship stayed at (800,0,0) yaw 0 for
+         the whole session and the P1 log could only ever show err=0.0m.
+         The shape below is the vanilla self-rearming ticker idiom, spelled
+         exactly like md/factionlogic_economy.xml:3604 "GenerateShortageData_Ticker"
+         (cue-level <delay> + <reset_cue> on itself; 67 such cues exist). -->
+    <cue name="X4MP_NpcDriveStep">
+      <delay exact="0.1s" />
+      <actions>
+        <!-- STATION WORLD ISOLATION (doc 4 section 2.2b, found in run #20-A 22:11)
+             This ticker carries no module attribute (the client needs it in the
+             blank world), and the flag it tests is set by X4MP_UniverseGo - which
+             is armed by the WORLD_GO handshake that never happens in the station
+             world. The unguarded property lookup threw "Error in MD cue
+             md.X4MP_TestWorld.X4MP_NpcDriveStep: Property lookup failed:
+             global.$X4MPDriveActive" on BOTH peers of run #20-A (host 22:11:24,
+             client 22:11:33). That was the only error the station world introduced
+             on its own - everything else in that log is pre-existing.
+             The "?" makes "does it exist" the condition: the single first pass
+             (cue-level <delay 0.1s/>) stays silent in either world, and the blank
+             world's kick (X4MP_UniverseGo -> reset_cue) arms the ticker exactly as
+             before, because there the global exists and is true. -->
+        <do_if value="global.$X4MPDriveActive?">
+          <!-- B group warps: position AND rotation, one pair per ship. Every lane
+               is >= 200 m clear of the others, so even where id 6/7 cross the path
+               of id 8 no two hulls can meet.
+               The globals are copied into cue-local variables first and the warps
+               read only those: that is precisely the shape run #4/#5 proved at
+               10 Hz. Feeding a <position>/<rotation> straight from a global (or
+               from an expression) has never been exercised in this file, and a
+               silent MD failure costs a whole run, so the proven idiom stays. -->
+          <set_value name="$x"     exact="global.$X4MPDriveX" />
+          <set_value name="$z"     exact="global.$X4MPDriveZ" />
+          <set_value name="$yaw6"  exact="global.$X4MPYaw6" />
+          <set_value name="$yaw7"  exact="global.$X4MPYaw7" />
+          <set_value name="$yaw8"  exact="global.$X4MPYaw8" />
+          <set_value name="$yaw9"  exact="global.$X4MPYaw9" />
+          <set_value name="$yaw10" exact="global.$X4MPYaw10" />
+          <warp object="global.$X4MPNpc6" sector="player.sector">
+            <position x="$x" y="-200" z="0" />
+            <rotation yaw="$yaw6" />
+          </warp>
+          <warp object="global.$X4MPNpc7" sector="player.sector">
+            <position x="$x" y="200" z="0" />
+            <rotation yaw="$yaw7" />
+          </warp>
+          <warp object="global.$X4MPNpc8" sector="player.sector">
+            <position x="2000" y="0" z="$z" />
+            <rotation yaw="$yaw8" />
+          </warp>
+          <warp object="global.$X4MPNpc9" sector="player.sector">
+            <position x="3000" y="-600" z="0" />
+            <rotation yaw="$yaw9" />
+          </warp>
+          <warp object="global.$X4MPNpc10" sector="player.sector">
+            <position x="3000" y="600" z="0" />
+            <rotation yaw="$yaw10" />
+          </warp>
+          <!-- advance both sweeps and the five independent rotations -->
+          <set_value name="global.$X4MPDriveX" exact="global.$X4MPDriveX + global.$X4MPDriveDir * 25" />
+          <set_value name="global.$X4MPDriveZ" exact="global.$X4MPDriveZ + global.$X4MPDriveZDir * 25" />
+          <set_value name="global.$X4MPYaw6"  exact="global.$X4MPYaw6  + 5deg" />
+          <set_value name="global.$X4MPYaw7"  exact="global.$X4MPYaw7  - 5deg" />
+          <set_value name="global.$X4MPYaw8"  exact="global.$X4MPYaw8  + 3deg" />
+          <set_value name="global.$X4MPYaw9"  exact="global.$X4MPYaw9  + 2deg" />
+          <set_value name="global.$X4MPYaw10" exact="global.$X4MPYaw10 + 10deg" />
+          <do_if value="global.$X4MPDriveX gt 5800">
+            <set_value name="global.$X4MPDriveDir" exact="-1" />
+          </do_if>
+          <do_if value="global.$X4MPDriveX lt 800">
+            <set_value name="global.$X4MPDriveDir" exact="1" />
+          </do_if>
+          <do_if value="global.$X4MPDriveZ lt -4000">
+            <set_value name="global.$X4MPDriveZDir" exact="1" />
+          </do_if>
+          <do_if value="global.$X4MPDriveZ gt 800">
+            <set_value name="global.$X4MPDriveZDir" exact="-1" />
+          </do_if>
+          <set_value name="global.$X4MPDriveStep" exact="global.$X4MPDriveStep + 1" />
+          <!-- ~30 minutes of motion (18000 x 0.1s); then the loop stops itself. -->
+          <do_if value="global.$X4MPDriveStep lt 18000">
+            <reset_cue cue="X4MP_NpcDriveStep" />
+          </do_if>
+        </do_if>
+      </actions>
+    </cue>
+
+    <!-- CLIENT: the macro NAME of the row that follows (10.8l.7). It travels on its
+         own trigger as ONE plain string, because a string inside the row's table does
+         not survive the UI -> MD marshalling - see the note in X4MP_SpawnRemote. -->
+    <cue name="X4MP_RemoteMacro" instantiate="true">
+      <conditions>
+        <event_ui_triggered screen="'X4MP_RemoteSync'" control="'spawnmacro'" />
+      </conditions>
+      <actions>
+        <set_value name="global.$X4MPRemoteMacro" exact="event.param3" />
+      </actions>
+    </cue>
+
+    <!-- CLIENT: recreate an NPC at the position broadcast by the host. The name
+         carries the logical id (read back by the DLL), and the ship is appended
+         to global.$X4MPNpcList in receive order — which is logical-id order —
+         so the list index equals the logical id here too, letting
+         X4MP_NpcDamage address it as global.$X4MPNpcList.{logicalID}. -->
+    <cue name="X4MP_SpawnRemote" instantiate="true">
+      <conditions>
+        <event_ui_triggered screen="'X4MP_RemoteSync'" control="'spawn'" />
+      </conditions>
+      <actions>
+        <!-- 10.8l: everything the client needs to rebuild the ship travels with the
+             row - its macro name (out of band, see X4MP_RemoteMacro above) and its rig
+             flag. The branch that used to choose a macro from two literals, plus the
+             logical-id special case for the Xenon I, is GONE: such a table can only
+             ever be right for the ships somebody remembered to list, and the lid test
+             was silently dead anyway (`eq` is not an MD operator - 10.8l.1).
+             10.8l.7 (run #15, 2026-09-15): this table is NUMBERS ONLY now. The macro
+             used to sit in it as field 9, and that is exactly why run #15 built zero
+             puppets: the client received all 131 rows and the DLL raised all 131 of
+             them, yet every create_ship failed, because `$rmacroName` came out of the
+             table empty (a string element in AddUITriggeredEvent's table does not
+             survive the UI -> MD marshalling) and `'macro.' + $rmacroName` therefore
+             produced no macro at all. Vanilla never puts a string in that table: it
+             passes ONE value as the 3rd argument -
+                 menu_station_configuration.lua:834
+                     AddUITriggeredEvent(menu.name, "moduleadded", macro)
+             read back by MD as
+                 x4ep1_mentor_subscription.xml:9564
+                     <set_value name="$SelectMacro" exact="@macro.{event.param3}"/>
+             so the row's table is numeric (9 fields: pose, faction, id, flags) and the
+             macro name arrives one trigger earlier. `@macro.{name}` is the vanilla way
+             to turn a runtime NAME into a macro VALUE (`common.xsd` on the `macroname`
+             type used by create_ship: "either a plain macro string or a script
+             expression that evaluates to a string or macro").
+             The client's puppets still need a pilot: without one they carry no AI at
+             all and there is nothing for the freeze order to hold (run #6). -->
+        <set_value name="$rlid"       exact="event.param3.{8}" />
+        <set_value name="$rflags"     exact="event.param3.{9}" />
+        <set_value name="$rmacroName" exact="global.$X4MPRemoteMacro" />
+        <do_if value="not $rmacroName or $rmacroName == 'unknown' or $rmacroName == ''">
+          <!-- Only reachable when the DLL could not read the macro off the ship, or
+               when the string channel above did not deliver. Fall back to the old
+               behaviour instead of creating nothing at all. -->
+          <do_if value="event.param3.{7} gt 0">
+            <set_value name="$rmacro" exact="@macro.{'ship_arg_s_fighter_01_a_macro'}" />
+          </do_if>
+          <do_else>
+            <set_value name="$rmacro" exact="@macro.{'ship_xen_s_fighter_01_a_macro'}" />
+          </do_else>
+          <debug_text text="'X4MP: spawn row for lid ' + $rlid + ' carried no macro - faction fighter used'" chance="100" />
+        </do_if>
+        <do_else>
+          <set_value name="$rmacro" exact="@macro.{$rmacroName}" />
+        </do_else>
+        <!-- 10.8l.8: the two tripwires that stood here (create "X4MP NPC 998" with a
+             literal macro, rename the target ship to "X4MP NPC 999") are retired -
+             they were a temporary 10.8l.7 diagnostic and run #16 read them back:
+             BOTH names turned up in the client's census (#1 "X4MP NPC 999",
+             #13 "X4MP NPC 998"), so the cue fires, create_ship works inside it and
+             the macro left the row's table only to arrive on its own trigger. Two
+             side effects went with them: the target ship is no longer renamed (which
+             had made the DLL map a lid 999 that does not exist), and the client no
+             longer owns a ship that was not part of the world. -->
+        <do_if value="event.param3.{7} gt 0">
+          <create_ship name="$remote" macro="$rmacro" sector="player.sector">
+            <owner exact="faction.argon" overridenpc="true" />
+            <pilot macro="character_argon_male_pilot_01_macro" />
+            <position x="event.param3.{1}" y="event.param3.{2}" z="event.param3.{3}" />
+          </create_ship>
+          <set_object_name object="$remote" name="'X4MP NPC ' + $rlid" />
+          <append_to_list name="global.$X4MPNpcList" exact="$remote" create="true" />
+          <!-- 2026-09-21: THE A GROUP IS RETIRED, so the client orders NOTHING here.
+               The 21-ship fleet is all group B (kGroupALastLid = 0 in x4mp_native.cpp):
+               the DLL freezes every puppet with order_wait and steers it from the host's
+               P1 snapshots, so an order issued here would be the "engine AI fights the
+               write" arm of the old A-group experiment - exactly what this world no longer
+               measures. The three blocks that used to stand here:
+                 * lids 1..5   appended to global.$X4MPNpcA for X4MP_UniverseGo  -> gone
+                 * lids 11..50 handed a Patrol order at creation                  -> gone
+                 * lids 6..10  no order (the P1 driver warps them)               -> unchanged
+               If the A/B rig is ever revived, all three have to come back TOGETHER with
+               kGroupALastLid - they are one setting living in two files. -->
+        </do_if>
+        <do_else>
+          <!-- Xenon side. $rflags gt 0 means the host built this ship with the rig
+               loadout (one engine, one shield, no weapons), so the client has to use
+               the identical macros: otherwise its copy carries a different silhouette
+               and a different shield grid, which is the entire point of comparing the
+               two. The test is NUMERIC on purpose - `gt` is the comparison this file
+               has actually exercised (the A-group branch), and the `eq` lesson in
+               10.8l is exactly about not trusting an unexercised one. -->
+          <do_if value="$rflags gt 0">
+            <create_ship name="$remote" macro="$rmacro" sector="player.sector">
+              <owner exact="faction.xenon" overridenpc="true" />
+              <pilot macro="character_argon_male_pilot_01_macro" />
+              <loadout macros="[macro.engine_xen_xl_allround_01_mk1_macro, macro.shield_xen_xl_standard_01_mk1_macro]">
+                <level exact="1" />
+                <variation exact="0" />
+              </loadout>
+              <position x="event.param3.{1}" y="event.param3.{2}" z="event.param3.{3}" />
+            </create_ship>
+            <set_object_name object="$remote" name="'X4MP NPC ' + $rlid + ' [RIG]'" />
+            <append_to_list name="global.$X4MPNpcList" exact="$remote" create="true" />
+            <set_known object="$remote" known="true" />
+          </do_if>
+          <do_else>
+            <create_ship name="$remote" macro="$rmacro" sector="player.sector">
+              <owner exact="faction.xenon" overridenpc="true" />
+              <pilot macro="character_argon_male_pilot_01_macro" />
+              <position x="event.param3.{1}" y="event.param3.{2}" z="event.param3.{3}" />
+            </create_ship>
+            <set_object_name object="$remote" name="'X4MP NPC ' + $rlid" />
+            <append_to_list name="global.$X4MPNpcList" exact="$remote" create="true" />
+          </do_else>
+        </do_else>
+        <debug_text text="'X4MP: remote NPC spawned'" chance="100" />
+      </actions>
+    </cue>
+
+    <!-- CLIENT: destroy the local NPC that corresponds to a despawned logical id.
+         10.8l.8 (run #16, 2026-09-15): two guards, both from the same observation.
+         The client raises its 131 spawn rows one per frame (~16 s at 10-12 fps) while
+         the host's world starts at once, so the host can kill a lid BEFORE the client
+         has built it. Run #16's host killed lid 110 at 07:29:00.5, the despawn
+         arrived at 07:29:00.529 - while row 110 was still #14 in the queue - and this
+         cue then destroyed nothing, because the list had no slot 110 yet. Row 110
+         built a brand-new full-hull Xenon corvette 3.5 s later and the client's own
+         Argon puppets fought it while the host's world was at peace.
+           * "$lid?" - destroy_object on a null slot is what made that failure silent.
+             The DLL now remembers such a despawn (s_despawnTombstones) and enforces
+             it when the row arrives, so a hole is expected here, not an error.
+           * "silent" (field 2) - when the DLL enforces a despawn for a puppet it just
+             built to keep the list lid-indexed, the ship never took part in the
+             client's fight, so it must vanish without an explosion the host never
+             produced. A normal despawn keeps explosion="true": that wreck is real on
+             both sides. -->
+    <cue name="X4MP_DespawnRemote" instantiate="true">
+      <conditions>
+        <event_ui_triggered screen="'X4MP_DespawnSync'" control="'despawn'" />
+      </conditions>
+      <actions>
+        <set_value name="$lid"    exact="event.param3.{1}" />
+        <set_value name="$silent" exact="event.param3.{2}" />
+        <do_if value="global.$X4MPNpcList.{$lid}?">
+          <do_if value="$silent and $silent gt 0">
+            <destroy_object object="global.$X4MPNpcList.{$lid}" explosion="false" />
+          </do_if>
+          <do_else>
+            <destroy_object object="global.$X4MPNpcList.{$lid}" explosion="true" />
+          </do_else>
+        </do_if>
+        <debug_text text="'X4MP: remote NPC despawned lid=' + $lid + ' silent=' + $silent" chance="100" />
+      </actions>
+    </cue>
+
+    <!-- BOTH PEERS: apply damage to the local copy of an NPC, addressed by its
+         logical id. global.$X4MPNpcList exists on the host (appended in
+         X4MP_SpawnNpc) and on the client (appended in X4MP_SpawnRemote), and its
+         index always equals the logical id. -->
+    <cue name="X4MP_NpcDamage" instantiate="true">
+      <conditions>
+        <event_ui_triggered screen="'X4MP_NpcDamageSync'" control="'damage'" />
+      </conditions>
+      <actions>
+        <set_value name="$lid" exact="event.param3.{1}" />
+        <!-- 10.8l.8: the "$lid?" tests are the same guard as in X4MP_DespawnRemote -
+             a lid the host has despawned can now leave a hole in the list (a hole is
+             what keeps the list lid-indexed), and reading .hullpercentage off a null
+             object is exactly how this cue would turn noisy. -->
+        <do_if value="global.$X4MPNpcList.{$lid}? and event.param3.{2} gt 0 and global.$X4MPNpcList.{$lid}.hullpercentage gt 0">
+          <set_value name="$hullFactor" exact="global.$X4MPNpcList.{$lid}.hull / global.$X4MPNpcList.{$lid}.hullpercentage" />
+          <apply_attackstrength object="global.$X4MPNpcList.{$lid}"
+                                hullshield="0"
+                                hullonly="event.param3.{2} * $hullFactor"
+                                shieldonly="0"
+                                hullnoshield="0" />
+        </do_if>
+        <do_if value="global.$X4MPNpcList.{$lid}? and event.param3.{3} gt 0 and global.$X4MPNpcList.{$lid}.shieldpercentage gt 0">
+          <set_value name="$shieldFactor" exact="global.$X4MPNpcList.{$lid}.shield / global.$X4MPNpcList.{$lid}.shieldpercentage" />
+          <apply_attackstrength object="global.$X4MPNpcList.{$lid}"
+                                hullshield="0"
+                                hullonly="0"
+                                shieldonly="event.param3.{3} * $shieldFactor"
+                                hullnoshield="0" />
+        </do_if>
+        <debug_text text="'X4MP: npc damage applied'" chance="100" />
+      </actions>
+    </cue>
+
+    <!-- BOTH PEERS (P0): apply ABSOLUTE hull/shield percentages to the local copy
+         of an NPC, addressed by its logical id (list index == logical id on both
+         peers). The DLL only sends values that LOWER the current hull/shield, and
+         -1 for "leave unchanged", so re-applying a packet is a no-op and can
+         never bounce back as a damage echo.
+         set_object_hull / set_object_shield take percentages (common.xsd: "Set an
+         object's hull value (percentage)"), which is the exact unit sent over the
+         wire and returned by GetComponentData("hullpercent").
+         A hull of 0 makes the engine blow the ship up by itself, so an NPC killed
+         on one peer dies (visually) on both within a frame or two instead of
+         after the old ~2s poll; X4MP_DespawnRemote then clears the wreck. -->
+            <!-- ===== P2 v1 (doc 3, section 10.8): behavioural-semantics relay =====
+             The host's AI events arrive here as UI-triggered events. v1 LOGS them
+             (that is the acceptance evidence: DLL log -> Lua -> MD -> debuglog) and
+             deliberately does NOT turn them into engine action yet - a client puppet
+             that really fired would damage its own copy of the target, and the vitals
+             lane would report that to the host as damage the host never took. -->
+        <cue name="X4MP_NpcOrder" instantiate="true">
+          <conditions>
+            <event_ui_triggered screen="'X4MP_NpcOrderSync'" control="'order'" />
+          </conditions>
+          <actions>
+            <debug_text text="'X4MP: npc ORDER id=%1 op=%2 order=%3 target=%4 kind=%5' + [event.param3.{1}, event.param3.{2}, event.param3.{3}, event.param3.{4}, event.param3.{5}]" chance="100" />
+          </actions>
+        </cue>
+
+        <!-- Fire reports are sampled: a 100-ship brawl produces hundreds per minute,
+             and the authoritative per-window counts live in the DLL's own
+             "P2 relay orders(sent/recv)=... fires(sent/recv)=..." line. -->
+        <cue name="X4MP_NpcFire" instantiate="true">
+          <conditions>
+            <event_ui_triggered screen="'X4MP_NpcFireSync'" control="'fire'" />
+          </conditions>
+          <actions>
+            <debug_text text="'X4MP: npc FIRE id=%1 target=%2 shots=%3' + [event.param3.{1}, event.param3.{2}, event.param3.{3}]" chance="10" />
+            <!-- ★2026-09-28（run #26j）：**lid = 0 = 对端英雄**（用户要求"看到对方的武器特效与炮塔弹道"）。
+                 对端玩家的每一次开火（含炮塔）由 DLL 以 lid=0 中继到这里 ⇒ 在**幽灵**对象上播枪口焰。
+                 写法逐字取自本文件**已实测**的旧探针（`<add_effect object="$X4MPGhostShip"
+                 effect="'muzzle_gen_s_laser_01_mk1'"/>`）⇒ 只用被证明会渲染的形式 ✓
+                 ⚠️ 刻意**只播枪口焰**、不做真弹丸/弹道模拟：真弹丸要命中判定与权威，代价远高于观感收益；
+                    "火力来自哪个方向"由幽灵的位置与朝向已经给出 ✓
+                 ⚠️ 本 cue 没有 module 属性 ⇒ 在每个世界都跑（关卡与测试世界都能看到）✓ -->
+            <do_if value="event.param3.{1} eq 0">
+              <do_if value="global.$X4MPGhostShip?">
+                <do_if value="global.$X4MPGhostShip.exists">
+                  <add_effect object="global.$X4MPGhostShip" effect="'muzzle_gen_s_laser_01_mk1'" />
+                </do_if>
+              </do_if>
+            </do_if>
+          </actions>
+        </cue>
+<cue name="X4MP_NpcVitals" instantiate="true">
+      <conditions>
+        <event_ui_triggered screen="'X4MP_NpcVitalsSync'" control="'vitals'" />
+      </conditions>
+      <actions>
+        <set_value name="$lid" exact="event.param3.{1}" />
+        <!-- 10.8l.8: one guard for both writes. A lid the host has despawned may leave
+             a hole in global.$X4MPNpcList (see X4MP_DespawnRemote), and set_object_hull
+             on a null object would log an error per row instead of doing nothing. -->
+        <do_if value="global.$X4MPNpcList.{$lid}?">
+          <do_if value="event.param3.{2} ge 0">
+            <set_object_hull object="global.$X4MPNpcList.{$lid}" exact="event.param3.{2}" />
+          </do_if>
+          <do_if value="event.param3.{3} ge 0">
+            <set_object_shield object="global.$X4MPNpcList.{$lid}" exact="event.param3.{3}" />
+          </do_if>
+        </do_if>
+        <debug_text text="'X4MP: npc vitals applied lid=' + $lid" chance="100" />
+      </actions>
+    </cue>
+        <!-- ★2026-10-13（0.1.1）：共 16 个特效探针已按 QA P1-7 删除 ✗（用户要求：正式包不含弹药特效探针）。
+             保留的结论：add_effect 在本工程路径上不渲染；开火数据的双向同步是好的（见 DLL 的 fires(sent/recv) 行）。 -->
+  </cues>
+</mdscript>

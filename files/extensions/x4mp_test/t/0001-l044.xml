@@ -1,0 +1,26 @@
+<?xml version="1.0" encoding="utf-8"?>
+<language id="44">
+  <page id="100000" title="X4MP" descr="X4MP multiplayer test texts" voice="no">
+    <t id="1">X4MP Blank Universe</t>
+    <t id="2">A single empty sector for X4MP multiplayer testing.</t>
+    <t id="3">X4MP Pilot</t>
+  </page>
+  <page id="100001" title="X4MP Stations" descr="X4MP station test world texts" voice="no">
+    <t id="1">X4MP Station World</t>
+    <t id="2">One empty sector with three pre-built stations (dock, attack, anti-air) for multiplayer station sync testing.</t>
+    <t id="3">X4MP Pilot</t>
+  </page>
+  <page id="100002" title="X4MP Level" descr="X4MP timeline level texts" voice="no">
+    <t id="1">X4MP: Ocean Guard</t>
+    <t id="2">You command a Boron Ray: defend the trade station, beat back three Xenon waves (20 S / 10 M / 1 K), clear the Xenon station's graviton turrets and destroy it.</t>
+    <t id="10">Protect the Boron trade station</t>
+    <t id="11">Clear the Xenon station's graviton turrets</t>
+    <t id="12">Destroy the Xenon station</t>
+    <t id="13">Ocean of Fantasy is safe</t>
+    <t id="20">Ocean of Fantasy</t>
+    <t id="21">X4MP level sector (private galaxy: only the level's own actors are on stage).</t>
+    <t id="22">HOST OFFLINE - the world is frozen, waiting for the host to return</t>
+    <t id="23">Host is back - the world has resumed</t>
+    <t id="3">X4MP Pilot</t>
+  </page>
+</language>

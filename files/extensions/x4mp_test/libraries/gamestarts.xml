@@ -1,0 +1,106 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  Adds two custom gamestarts to the New Game menu:
+
+    x4mp_blank    "X4MP Blank Universe" - the NPC/AI sync world (doc 3).
+                  md\x4mp_testworld.xml's cue X4MP_SpawnScriptShip and the
+                  10-ship fleet of X4MP_SpawnNpc live here.
+    x4mp_stations "X4MP Station World"  - the station sync world (doc 4).
+                  No NPC sync: md\x4mp_stations.xml builds three pre-built
+                  stations instead (see the gate on global.$X4MPNpcWorld in
+                  md\x4mp_testworld.xml - the host DLL raises x4mp_spawn_npc
+                  on EVERY game load, so the NPC fleet has to be switched off
+                  from the MD side, not by the gamestart).
+
+  Both boots the player into the same single, empty sector
+  (maps/x4mp_galaxy_macro.xml) with NPC jobs/GOD disabled, so the scene is
+  deterministic and quiet.
+-->
+<diff>
+  <add sel="/gamestarts">
+    <gamestart id="x4mp_blank" name="{100000,1}" description="{100000,2}" group="1">
+      <info>
+        <item name="{1021,8}" value="{1021,5002}" />
+        <item name="{1021,13}" value="{1021,5013}" />
+        <item name="{1021,9}" value="{1021,51}" />
+        <item />
+        <item name="{1021,1}" value="{1021,43}" />
+      </info>
+      <location galaxy="x4mp_galaxy_macro" zone="x4mp_cluster_01_sector_01_zone_01_macro">
+        <position x="0" y="0" z="0" />
+        <rotation yaw="0" pitch="0" roll="0" />
+      </location>
+      <player macro="character_player_scenario_combat_argon_macro" money="0" name="{100000,3}">
+        <ship macro="ship_arg_s_fighter_01_a_macro" />
+      </player>
+      <universe ventures="false" visitors="false" onlineinventory="false">
+        <jobs enabled="false" />
+        <god enabled="false" />
+      </universe>
+    </gamestart>
+  </add>
+
+  <!-- ============================================================
+       STATION WORLD (technical doc 4). Same blank sector, same
+       jobs/god off - but no NPC fleet. md\x4mp_stations.xml creates
+       the three stations listed in doc 4 section 3.1.
+       money is 1'000'000 (not 0 like the blank world) because the
+       docking/menu interaction of section 5 needs a wallet.
+       ============================================================ -->
+  <add sel="/gamestarts">
+    <gamestart id="x4mp_stations" name="{100001,1}" description="{100001,2}" group="1">
+      <info>
+        <item name="{1021,8}" value="{1021,5002}" />
+        <item name="{1021,13}" value="{1021,5013}" />
+        <item name="{1021,9}" value="{1021,51}" />
+        <item />
+        <item name="{1021,1}" value="{1021,43}" />
+      </info>
+      <location galaxy="x4mp_galaxy_macro" zone="x4mp_cluster_01_sector_01_zone_01_macro">
+        <position x="0" y="0" z="0" />
+        <rotation yaw="0" pitch="0" roll="0" />
+      </location>
+      <player macro="character_player_scenario_combat_argon_macro" money="1000000" name="{100001,3}">
+        <ship macro="ship_arg_s_fighter_01_a_macro" />
+      </player>
+      <universe ventures="false" visitors="false" onlineinventory="false">
+        <jobs enabled="false" />
+        <god enabled="false" />
+      </universe>
+    </gamestart>
+  </add>
+
+  <!-- ============================================================
+       LEVEL: 梦幻海洋·三波守卫战（技术文档 6）
+
+       与上面两个世界同一个空星区（确定性 + jobs/god 关 ⇒ 双开同步最稳），
+       但**玩家直接开 Boron 巨鳐（L 驱逐舰）**，钱给足便于满配主武器与炮塔 ——
+       这是关卡设计里"用主武器点掉 Xenon 站引力子炮塔"的前提。
+
+       md\x4mp_level_boron.xml 里 8 个 cue 都带 module="x4mp_level_boron"，
+       因此这一关**只在这个开局里跑**，不会污染 x4mp_blank / x4mp_stations
+       或任何普通存档。
+       ============================================================ -->
+  <add sel="/gamestarts">
+    <gamestart id="x4mp_level_boron" name="{100002,1}" description="{100002,2}" group="1">
+      <info>
+        <item name="{1021,8}" value="{1021,5002}" />
+        <item name="{1021,13}" value="{1021,5013}" />
+        <item name="{1021,9}" value="{1021,51}" />
+        <item />
+        <item name="{1021,1}" value="{1021,43}" />
+      </info>
+      <location galaxy="x4mp_galaxy_macro" zone="zone001_cluster_604_sector001_macro">
+        <position x="0" y="0" z="0" />
+        <rotation yaw="0" pitch="0" roll="0" />
+      </location>
+      <player macro="character_player_scenario_combat_argon_macro" money="5000000" name="{100002,3}">
+        <ship macro="ship_bor_l_destroyer_01_a_macro" />
+      </player>
+      <universe ventures="false" visitors="false" onlineinventory="false">
+        <jobs enabled="false" />
+        <god enabled="false" />
+      </universe>
+    </gamestart>
+  </add>
+</diff>

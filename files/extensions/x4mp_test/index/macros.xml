@@ -1,0 +1,8 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- ?xml-stylesheet href="index.xsl" type="text/xsl" ? -->
+<index>
+  <!-- Blank-universe map. The map file defines four macros (galaxy/cluster/
+       sector/zone), all prefixed "x4mp_"; this single wildcard entry indexes
+       every macro that file defines. -->
+  <entry name="x4mp_*" value="extensions\x4mp_test\maps\x4mp_galaxy_macro.xml" />
+</index>

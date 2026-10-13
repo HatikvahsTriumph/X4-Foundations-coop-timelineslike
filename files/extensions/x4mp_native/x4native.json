@@ -1,0 +1,6 @@
+{
+    "library": "native\\x4mp_native.dll",
+    "priority": 100,
+    "min_api_version": 1,
+    "autoreload": false
+}

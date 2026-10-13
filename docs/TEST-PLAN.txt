@@ -1,0 +1,69 @@
+# Test plan — 0.1.1
+
+Copy this into a text file, run the sections in order, and keep the log files. Report anything
+unexpected with:
+**T-number + what you saw + the key host log lines + the key client log lines + reproducible? y/n**
+
+Log files: `Documents\Egosoft\X4\<profile>\x4native\x4mp_native\x4mp_native.log`
+
+---
+
+## T0 — Baseline self-check (no multiplayer needed)
+
+- [ ] the shipped DLL is `567,296 B` and reports build id `run26x-npcveto`
+- [ ] the pack's `extensions\` contains no `x4mp_native_live_*.dll` or `*.bak` leftovers
+- [ ] level MD = **26 cues**, test world MD = **15 cues** (31 means the probes were not removed)
+
+## T1 — World and handshake
+
+- [ ] both players use the **same** New Game entry
+- [ ] host log: `local world fingerprint sig=xxxxxxxx sectors=3` equals the peer's line
+- [ ] if they differ: the window title shows `[X4MP WORLD MISMATCH]` (go back to the main menu)
+- [ ] kill the host: the client **freezes** instead of drifting away
+
+## T2 — Client ship (this release's focus #1)
+
+- [ ] the client's ship is the Terran **Osaka**, named `X4MP LVL Client Osaka`
+- [ ] the string `X4MP LVL Client Behemoth` never appears in the client log
+- [ ] the host can see the ghost replica (`T1 ghost replica uid=0 -> NNNN`) and it follows
+
+## T3 — Probes are gone (focus #2)
+
+- [ ] between 22 s and 70 s after world start there are **no** muzzle flashes or explosions
+- [ ] the log never contains `X4MP FX probe`
+- [ ] the log never contains `X4MP_P2Fx`
+
+## T4 — NPC death case (focus #3)
+
+- [ ] the host brings any NPC to 0 hull
+- [ ] the client's copy disappears with the host's, and the client log has **no**
+      `puppet id=NN is a hull-0.0 remnant - not mapped`
+- [ ] the host log shows `NPC veto applied lid=...` (rate-limited to 5 s)
+- [ ] counter-example to report: "no NPC visible on the client" / `client sync mapped=0`
+
+## T5 — Second ghost death (QA P1-8 semantics)
+
+- [ ] let the peer's ship be destroyed twice in one session
+- [ ] the ghost explodes and is rebuilt **both** times (if only the first one works, report it:
+      P1-8 needs `reset_cue` instead of `instantiate`)
+
+## T6 — 0.1 regression basics
+
+- [ ] NPC pose follows the host (~10 Hz); the client does not broadcast its own NPCs
+- [ ] damage authority: the client hits a host-side NPC ⇒ client log
+      `client attack -> host`, host log `PEER DAMAGE applied` (and it only ever goes down)
+- [ ] station lane: `station lane rows(sent/recv/applied)` counts grow
+- [ ] mission flow: waves 1-3, the carrier, station 2 destroyed ⇒ win/lose is announced
+
+---
+
+## Known issues you should still expect in 0.1.1
+
+These are documented, not new bugs:
+
+* station module rows on the client may report far fewer `applied` than `sent`
+  (module-level landing; QA P0-2/P0-3 still under investigation);
+* a turret destroyed on the host may keep firing on the client (the turret lane is not implemented yet);
+* the client cannot see the other player's weapon fire (the effect line is deliberately not in
+  this package);
+* `NPC veto applied` lines are rate-limited, so a burst of corrections only prints a few lines.

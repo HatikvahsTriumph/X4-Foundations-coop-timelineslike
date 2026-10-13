@@ -1,0 +1,841 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  ============================================================================
+  X4MP STATION WORLD (technical doc 4)   md\x4mp_stations.xml
+  ============================================================================
+
+  This file only runs when the gamestart "x4mp_stations" was picked: every cue
+  carries module="x4mp_stations", and an MD module is active only inside the
+  gamestart that carries its id. That is not theory in this project any more -
+  md\x4mp_testworld.xml:10 (module="x4mp_blank") is the same mechanism, and its
+  ships exist in the blank world only.
+
+  DIVISION OF LABOUR WITH md\x4mp_testworld.xml
+    blank world   (x4mp_blank)     doc 3's NPC/AI world. Builds the ghost + the
+                                   target ship (cue X4MP_SpawnScriptShip) and
+                                   the 10-ship fleet (cue X4MP_SpawnNpc).
+    station world (x4mp_stations)  THIS file. Rebuilds the two network carriers
+                                   (invariant I3: the cues that warp and damage
+                                   them carry no module attribute, so they run
+                                   here as well) and then places the three
+                                   pre-built stations of doc 4 section 3.1.
+
+  The NPC FLEET must not appear here. The host DLL raises x4mp_spawn_npc on
+  EVERY game load (x4mp_native.cpp, on_game_loaded(): "g_npc_stage = g_asHost
+  ? 1 : 2") and knows nothing about gamestarts, so the switch lives in MD:
+  cue X4MP_SpawnNpc is wrapped in "do_if value=global.$X4MPNpcWorld?" and that
+  flag is only ever set by X4MP_SpawnScriptShip (blank world). Nothing in this
+  file has to clear it - it is simply never set on this side.
+
+  STATION MACROS AND PLANS USED (all vanilla, all verified in the unpacked game)
+    idx 1  macro.station_arg_tradestation_base_01_macro   plan 'arg_tradestation'
+    idx 2  macro.station_xen_defence_base_01_macro        plan 'xen_defence'
+    idx 3  macro.station_xen_shipyard_base_01_macro       plan 'xen_shipyard'
+
+  The macro/plan pairing is vanilla's own: libraries\modulesets.xml gives every
+  station set its base macro, libraries\stationgroups.xml gives it the
+  construction plan, and libraries\constructionplans.xml holds the plans
+  themselves (whole module trees with per-module offsets and rotations).
+  A station created from a base macro alone is an empty base - the plan is what
+  makes it a building. And state=componentstate.operational is what makes it a
+  FINISHED building instead of a build site (default is construction).
+-->
+<mdscript name="X4MP_Stations" xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance" xsi:noNamespaceSchemaLocation="md.xsd">
+  <cues>
+
+    <!-- ============================================================
+         NETWORK CARRIERS (invariant I3, doc 4 section 2.3)
+
+         Three cues of md\x4mp_testworld.xml carry no module attribute
+         (X4MP_NetworkSync, X4MP_GhostDestroy, X4MP_SelfDamage), so they run in
+         this world too - that is exactly what "the player's ship sync is not
+         affected by the gamestart" means. They address global.$X4MPGhostShip
+         and global.$X4MPTargetShip, and those are created by a blank-world cue,
+         so they would be null here. In this project null does not throw - it
+         quietly does nothing - so the two ships are rebuilt right here with the
+         SAME literals as the blank world (see x4mp_testworld.xml:20 to :43).
+         ============================================================ -->
+    <cue name="X4MP_SpawnNetworkCarriers" module="x4mp_stations">
+      <conditions>
+        <event_game_started />
+      </conditions>
+      <actions>
+        <!-- Ghost: no <pilot> tag means no AI at all; its transform is written
+             by X4MP_NetworkSync from the remote player's packets. -->
+        <create_position name="$GhostPos" object="player.entity" space="player.sector" x="0" y="0" z="-5000" />
+        <create_ship name="$ScriptShip" macro="macro.ship_arg_s_fighter_01_a_macro" sector="player.sector">
+          <owner exact="faction.player" />
+          <position value="$GhostPos" />
+        </create_ship>
+        <set_known object="$ScriptShip" known="true" />
+        <set_object_name object="$ScriptShip" name="'X4MP Ghost'" />
+        <set_value name="global.$X4MPGhostShip" exact="$ScriptShip" />
+
+        <!-- 2026-09-21: the "X4MP Target" ship is GONE here too (user request). It was
+             built in this world only because X4MP_SelfDamage used to dereference
+             global.$X4MPTargetShip inside a <do_if> condition (a null global in a
+             condition is a runtime error in MD, which is why the blank world had it
+             too). That cue now applies every incoming damage packet to player.entity,
+             so the ship is dead weight on both peers and on both worlds. -->
+      </actions>
+    </cue>
+
+    <!-- ============================================================
+         THE STATIONS (doc 4 section 3.1 / 3.2)
+
+         Order matters twice in this cue:
+
+           1. append_to_list is the station's ONLY address. The list index IS
+              the idx the DLL parses out of the name ("X4MP STN <idx>") and the
+              index every later vitals row uses - skipping one append would
+              shift every following station by one (same iron rule as
+              global.$X4MPNpcList, doc 3 section 10.8l.8).
+           2. state="componentstate.operational" must be written out. The
+              default is construction: a zero-module base plus a build task -
+              a station that looks "there" but has no pier, no dock and no
+              turret, with nothing in any log to say so.
+
+         Both peers execute these same literals at game start, which is why no
+         handshake is needed for the stations to exist on both sides (I1).
+         ============================================================ -->
+    <cue name="X4MP_SpawnStations" module="x4mp_stations">
+      <conditions>
+        <event_game_started />
+      </conditions>
+      <actions>
+        <!-- idx 1 : Argon trading station - the dockable one (doc 4 section 5).
+             A finished station, so it has the pier, the S/M docks and the
+             landing menu that section 5 needs. Owner is faction.argon, i.e.
+             the ordinary "dock at somebody else's station" case, not the
+             player-owns-it special case. -->
+        <create_station name="$Stn1" macro="macro.station_arg_tradestation_base_01_macro"
+                        constructionplan="'arg_tradestation'"
+                        owner="faction.argon" sector="player.sector"
+                        state="componentstate.operational">
+          <position x="0" y="0" z="8000" />
+          <rotation yaw="45deg" pitch="0deg" roll="0deg" />
+        </create_station>
+        <set_object_name object="$Stn1" name="'X4MP STN 1'" />
+        <set_known object="$Stn1" known="true" />
+        <append_to_list name="global.$X4MPStationList" exact="$Stn1" create="true" />
+        <signal_objects object="player.galaxy" param="'init station'" param2="$Stn1" param3="false" comment="Add control entities." />
+
+        <!-- idx 2 : Xenon defence station - the one that is attacked and that
+             shoots back (doc 4 section 4 and 6). Xenon, because the player is
+             hostile to them by default: no reputation set-up needed, and the
+             station's own turrets are the anti-air fire we want to observe. -->
+        <create_station name="$Stn2" macro="macro.station_xen_defence_base_01_macro"
+                        constructionplan="'xen_defence'"
+                        owner="faction.xenon" sector="player.sector"
+                        state="componentstate.operational">
+          <position x="0" y="0" z="-25000" />
+          <rotation yaw="90deg" pitch="0deg" roll="0deg" />
+        </create_station>
+        <set_object_name object="$Stn2" name="'X4MP STN 2'" />
+        <set_known object="$Stn2" known="true" />
+        <append_to_list name="global.$X4MPStationList" exact="$Stn2" create="true" />
+        <signal_objects object="player.galaxy" param="'init station'" param2="$Stn2" param3="false" comment="Add control entities." />
+
+        <!-- idx 3 : Xenon shipyard - a big, far-away target (optional station of
+             the table; delete this block and the count below to run the world
+             with two stations). It exists to answer "does a station 46 km away
+             still show up on both peers' radar and map identically". -->
+        <create_station name="$Stn3" macro="macro.station_xen_shipyard_base_01_macro"
+                        constructionplan="'xen_shipyard'"
+                        owner="faction.xenon" sector="player.sector"
+                        state="componentstate.operational">
+          <position x="12000" y="2000" z="-40000" />
+          <rotation yaw="0deg" pitch="0deg" roll="0deg" />
+        </create_station>
+        <set_object_name object="$Stn3" name="'X4MP STN 3'" />
+        <set_known object="$Stn3" known="true" />
+        <append_to_list name="global.$X4MPStationList" exact="$Stn3" create="true" />
+        <signal_objects object="player.galaxy" param="'init station'" param2="$Stn3" param3="false" comment="Add control entities." />
+
+        <!-- The station count the census (doc 4 section 3.4) compares against. -->
+        <set_value name="global.$X4MPStationCount" exact="3" />
+        <debug_text text="'X4MP: station world created (3 stations)'" chance="100" />
+      </actions>
+    </cue>
+
+    <!-- ============================================================
+         MARKERS (own cue on purpose)
+
+         If one action of a cue fails, the whole cue stops at that action - and
+         MD says nothing about it. The stations above are the thing under test,
+         so nothing cosmetic shares their cue. Here: forced radar visibility,
+         so all three can be found by eye without scanning (vanilla does the
+         same for test-gamestart objects, md\setup_gamestarts.xml:1572).
+         ============================================================ -->
+    <cue name="X4MP_StationMarkers" module="x4mp_stations">
+      <delay exact="5s" />
+      <actions>
+        <do_if value="global.$X4MPStationList?">
+          <do_for_each name="$stn" in="global.$X4MPStationList">
+            <set_object_forced_radar_visible object="$stn" visible="true" />
+          </do_for_each>
+        </do_if>
+        <debug_text text="'X4MP: stations marked on radar'" chance="100" />
+      </actions>
+    </cue>
+
+    <!-- ============================================================
+         STATION EQUIPMENT  (S3, doc 4 section 3.5) - added 2026-09-18
+
+         A station made with <create_station> + constructionplan +
+         state=componentstate.operational gets the module TREE but NO
+         EQUIPMENT: the engine does not fill turret / shield slots by
+         itself and never has. Vanilla's own station finalisation does
+         it explicitly (md\finalisestations.xml:125 to :139):
+
+             set_module_loadout_level -> generate_loadout
+             -> apply_loadout (once per sequence entry)
+             -> apply_construction_sequence
+
+         run #20-B measured what skipping that step looks like: both
+         peers' saves hold three class="station" with 18
+         class="defencemodule" and ZERO class="turret" and zero station
+         shield generators, while a vanilla save carries 20 turrets +
+         11 shields on every single xenon_small_station_01_base_macro.
+         A station without turrets cannot shoot back, so A2 (doc 4
+         section 7.1) could never have passed.
+
+         apply_loadout's schema note (libraries\common.xsd:24603) says
+         the target may be "either a ship, or a station module", so an
+         EXISTING module can be equipped in place - no rebuild, no
+         construction vessel, no resources.
+
+         level="1.0f" fills every slot; variation="0" makes both peers
+         pick the same wares (that is what keeps the two station copies
+         identical, invariant I1).
+
+         One cue per class on purpose: a failing action stops its whole
+         cue and MD says nothing about it (same reasoning as the MARKERS
+         cue above), so a bad class name can only cost us that one class.
+         ============================================================ -->
+    <!-- ============================================================
+         STATION EQUIPMENT, ROUND 2 (2026-09-21 late) - the vanilla route
+
+         ROUND 1 (what used to stand here) was wrong, and the instrumented solo run
+         proved it instead of guessing: three cues found every module (18 defence,
+         7 dockarea, 4 pier), generate_loadout returned a non-null table every time,
+         apply_loadout was called 18 times - and the save still had ZERO turrets,
+         with $X4MPEq* counters reading Found=Loadout=Applied=18, Done=1. So the
+         actions all ran; the CALL SHAPE was wrong.
+
+         Evidence for the correct shape (all vanilla):
+           * every station-side apply_loadout in the whole md/ tree uses
+             `sequence=` + `index=` - factionlogic_stations.xml:545,
+             factionsubgoal_buildstation.xml:207, finalisestations.xml:135/354/1016.
+             `object=` appears only for SHIPS (gm_barterwares.xml:2410,
+             gm_getexactfleet.xml:727).
+           * finalisestations.xml:1000-1027 "Apply_Loadout_To_Stations" is the official
+             path for an ALREADY-BUILT station, and it reads the station's own
+             construction sequence as a property:
+                 $Sequence = $Station.plannedconstruction.sequence
+             then generate_loadout sequence=$Sequence, apply_loadout sequence/index,
+             and finally either apply_construction_sequence (the creation flow,
+             line 138) or add_build_to_expand_station (the resourced build-task
+             variant, commented as the alternative there).
+
+         v1 of the fix = the creation-flow ending: apply_construction_sequence, i.e.
+         build the equipment immediately with no build storage and no construction
+         vessel. If that turns out to disturb an operational station, the documented
+         fallback is one line: replace it with
+             <add_build_to_expand_station object="$stn.buildstorage" buildobject="$stn"
+                                          constructionplan="$seq" result="$bid" />
+         (costs materials + time, exactly like a player refit).
+
+         Counters are kept - they are the only on-disk evidence in this setup:
+           $X4MPEqSeqFound / Applied / Constructed / Done
+           $X4MPEqSeqNoDrones  = 1 when the loadout was generated with the drone
+                                 exclusion (route B, 2026-09-21 - doc 4 §12)
+         ============================================================ -->
+    <cue name="X4MP_EquipStationsSeq" module="x4mp_stations">
+      <delay exact="10s" />
+      <actions>
+        <set_value name="global.$X4MPEqSeqFound"       exact="0" />
+        <set_value name="global.$X4MPEqSeqLoadouts"    exact="0" />
+        <set_value name="global.$X4MPEqSeqApplied"     exact="0" />
+        <set_value name="global.$X4MPEqSeqConstructed" exact="0" />
+        <set_value name="global.$X4MPEqSeqFinalised"   exact="0" />
+        <set_value name="global.$X4MPEqSeqOfficer"     exact="0" />
+        <set_value name="global.$X4MPEqSeqOfficerFail" exact="0" />
+        <set_value name="global.$X4MPEqSeqDefNpcHad"   exact="0" />
+        <set_value name="global.$X4MPEqSeqDone"        exact="0" />
+        <set_value name="global.$X4MPEqSeqLevel"       exact="0" />
+        <!-- 路线 B（2026-09-21 用户决定）：站不带无人机。1 = 已按 doc 4 §12 排掉
+             loadout 里的无人机单元（原版 finalisestations.xml:344-345 同款做法）。 -->
+        <set_value name="global.$X4MPEqSeqNoDrones"    exact="0" />
+        <!-- 2026-09-21：模块清单计数器。S3 的每站循环里 +1，用作 "X4MP STN <idx>#<k>"
+             里的 idx（= 站的顺序号，与站名 "X4MP STN n" 的 n 一致）。 -->
+        <set_value name="global.$X4MPModsStnCounter"   exact="0" />
+        <do_if value="global.$X4MPStationList?">
+          <do_for_each name="$stn" in="global.$X4MPStationList">
+            <set_module_loadout_level object="$stn" exact="1.0f" />
+            <!-- ===== 路线 B 的尾巴：船厂/装备厂的"装备库存"（2026-09-21 夜实证）=====
+                 用户报"Xenon 船厂仍然有无人机"，存档实抓证明**不是 loadout 装进去的**，
+                 而是这类站自带的装备清单：
+                   X4MP STN 3 (station_xen_shipyard_base_01_macro) 的
+                     <ammunition><available>
+                       <item macro="ship_gen_s_fightingdrone_01_a"      amount="87"/>
+                       <item macro="ship_gen_xs_cargodrone_empty_01_a"  amount="24"/>
+                       <item macro="ship_gen_xs_repairdrone_01_a"       amount="46"/>
+                 而 STN 1 / STN 2 的同一清单是**空的** ⇒ 与"船厂/装备厂"这个类型直接相关
+                 （用户判断正确）。generate_loadout 的 units/drones 过滤只作用于 loadout
+                 条目，碰不到它，站照样能放飞。
+                 修法用原版自己的原语 common.xsd:39329 `set_equipment_wares_excluded`
+                 （文档原文："Define equipment wares from the default equipment for the
+                 object owners' faction that should not be available for construction
+                 (only applies to objects with build modules such as shipyards or
+                 equipment docks)"；参数组 common.xsd:7952，wares 可列多枚）。
+                 先在这里"定义"好，再在 finalisation（init station）之后补一次，
+                 以防清单是那一步算出来的 —— 两次调用是幂等的。 -->
+            <do_if value="$stn.canequipships?">
+              <set_equipment_wares_excluded object="$stn"
+                wares="[macro.ship_gen_s_fightingdrone_01_a_macro, macro.ship_gen_xs_cargodrone_empty_01_a_macro, macro.ship_gen_xs_repairdrone_01_a_macro, macro.ship_gen_xs_buildingdrone_01_a_macro]" />
+              <set_value name="global.$X4MPEqSeqNoDronesStock" operation="add" exact="1" />
+            </do_if>
+            <set_value name="global.$X4MPEqSeqLevel" exact="$stn.moduleloadoutlevel" />
+            <set_value name="$seq" exact="$stn.plannedconstruction.sequence" />
+            <do_if value="$seq?">
+              <set_value name="global.$X4MPEqSeqFound" operation="add" exact="1" />
+              <!-- ===== 无人机策略 = 路线 B（2026-09-21 用户决定；见 doc 4 §12）=====
+                   现象：两端的站各自放飞自己那批防御无人机（引擎生成、名字不是
+                   "X4MP NPC *"），永远进不了同步层 ⇒ 目视上就是"无人机没同步"。
+                   用户裁定：先走 B 路线 —— 两端都不带无人机（世界一致，站照常开炮），
+                   真同步无人机（动态对象通道）留作 C 路线后续。
+                   做法就用原版造新站时的同款开关（finalisestations.xml:344-345）：
+                       flags="ammo units drones" invertflags="true"
+                   common.xsd 的 loadout flag `units` 文档正是 "Units (drones)"。
+                   ⚠ 这里只排无人机单元（units drones），不动 ammo/武器 ⇒ S3 的炮塔补装
+                   不受影响；但**改后必须复核 [2] 炮塔计数仍 > 0**（S3 的血的教训：
+                   任何 generate_loadout 参数变动都要用炮塔数 + 存档复验）。 -->
+              <generate_loadout result="$lo" sequence="$seq" faction="$stn.owner"
+                                level="1.0f" variation="0"
+                                flags="units drones" invertflags="true" />
+              <set_value name="global.$X4MPEqSeqNoDrones" exact="1" />
+              <do_if value="$lo?">
+                <set_value name="global.$X4MPEqSeqLoadouts" exact="$lo.count" />
+                <do_all exact="$lo.count" counter="$l">
+                  <apply_loadout loadout="$lo.{$l}" sequence="$seq" index="$l" />
+                  <set_value name="global.$X4MPEqSeqApplied" operation="add" exact="1" />
+                </do_all>
+              </do_if>
+              <apply_construction_sequence station="$stn" sequence="$seq" />
+              <set_value name="global.$X4MPEqSeqConstructed" operation="add" exact="1" />
+
+              <!-- ===== FINALISATION (2026-09-21 late): the two lines vanilla runs right
+                   after apply_construction_sequence (finalisestations.xml:141-147):
+                     set_build_plot object=$Station ... allowreduction="true"
+                     signal_objects param="'init station'" param2=$Station param3="true"
+                   with vanilla's own comment "Allow the station to be set up with rooms,
+                   resources and the such".
+                   Without them our station was built but never FINALISED, which is the
+                   prime suspect for "turrets exist but never fire" (round 3 finding: all
+                   322 turrets carried lastshottime = the equipment moment and none ever
+                   fired at the player during an attack at t=99 s). -->
+              <set_value name="$bbox" exact="$stn.size / 2" />
+              <set_build_plot object="$stn" x="$bbox" y="$bbox" z="$bbox" allowreduction="true" />
+              <signal_objects object="player.galaxy" param="'init station'" param2="$stn" param3="true" />
+              <set_value name="global.$X4MPEqSeqFinalised" operation="add" exact="1" />
+
+              <!-- 路线 B 的尾巴（第二次）：init station 之后再排除一遍无人机。
+                   如果站的 <ammunition><available> 清单是在 finalisation / 站初始化
+                   阶段算出来的，上面那次就太早了；这一步保证最终状态仍然没有无人机。
+                   幂等：同一组 ware 定义第二次只是覆盖。 -->
+              <do_if value="$stn.canequipships?">
+                <set_equipment_wares_excluded object="$stn"
+                  wares="[macro.ship_gen_s_fightingdrone_01_a_macro, macro.ship_gen_xs_cargodrone_empty_01_a_macro, macro.ship_gen_xs_repairdrone_01_a_macro, macro.ship_gen_xs_buildingdrone_01_a_macro]" />
+              </do_if>
+
+              <!-- ============================================================
+                   路线 B 第三步（2026-09-21 夜 / run #21-F 实证）：禁止站"放飞"无人机。
+                   为什么前两步不够：清掉 loadout 的 units/drones、清掉站的装备库存
+                   （<ammunition><available>）之后，玩家一飞到 STN 3 旁边，主机日志立刻
+                   出现 65 条
+                     station idx=3 neighbour: ship_gen_s_fightingdrone_01_a_macro
+                       (XEN 防御无人机) owner=xenon dist=3.7 ~ 6.3 km
+                   存档（05:25）里 31 架这种无人机在星区自由飞行：behavior="dogfight1"、
+                   forcesteering="1"、spawntime=116s（飞出来的那一刻才生成），
+                   而它们的 listener=[0xfcd8] 正是 X4MP STN 3 ⇒ **是船厂自己的无人机**；
+                   攻击目标 [0xf0da] = ship_arg_s_fighter_01_a / owner=player ⇒ 它们在打玩家。
+                   结论：无人机是"站拥有/生产"的对象（Xenon 还有自产配方），
+                   真正的开关是 set_drone_armed（common.xsd:30969，"Set the drone armed
+                   status for a specific unit category of an object"），原版用法见
+                   scenario_advanced.xml:291-293（armed="false" = 不投入使用）。
+                   ⚠ 只 disarm 无人机，不动炮塔/防御官 ⇒ 站照常开炮还手（A2 不受影响）。
+                   ============================================================ -->
+              <set_drone_armed object="$stn" category="unitcategory.defence"   armed="false" />
+              <set_drone_armed object="$stn" category="unitcategory.build"     armed="false" />
+              <set_drone_armed object="$stn" category="unitcategory.repair"    armed="false" />
+              <set_drone_armed object="$stn" category="unitcategory.transport" armed="false" />
+              <set_value name="global.$X4MPEqSeqNoDronesArmed" operation="add" exact="1" />
+
+              <!-- ============================================================
+                   模块清单（2026-09-21 · 用户要求"站血按模块掉"）
+                   给每个模块起名 "X4MP STN <idx>#<k>"，并按 k 的顺序放进
+                   global.$X4MPStationMods.{idx}，供"按模块读写血量"使用。
+
+                   为什么需要它：站的伤害是**模块血量**（一个站要炸，得全部模块都被摧毁），
+                   而两端的模块 uid 各不相同 ⇒ 需要一个两端共享的键。本项目对站和 NPC 用的
+                   都是"名字即键"（"X4MP STN n" / "X4MP NPC n"），这里是同一招的延伸：
+                   k = 本次枚举顺序，DLL 从名字里解析 k，两端因此天然一致。
+                   ============================================================ -->
+              <set_value name="global.$X4MPModsStnCounter" operation="add" exact="1" />
+              <find_object_component name="$stnmods" object="$stn" class="class.module"
+                                     checkoperational="false" multiple="true" recursive="true" />
+              <do_if value="$stnmods?">
+                <set_value name="global.$X4MPStationMods.{$X4MPModsStnCounter}" exact="$stnmods" />
+                <do_all exact="$stnmods.count" counter="$m">
+                  <set_object_name object="$stnmods.{$m}"
+                                   name="'X4MP STN ' + global.$X4MPModsStnCounter + '#' + $m" />
+                </do_all>
+              </do_if>
+
+              <!-- ===== DEFENCE OFFICER (inituniverse.xml:494-511 "CreateDefenceControlEntity",
+                   copied verbatim): a station's turrets need a commander. The save from
+                   round 3 held no crew on any of our stations (the only NPCs were argon
+                   civilians), which is why nothing aimed at the player. `defencenpc.exists`
+                   is vanilla's own guard, and it doubles as our probe. -->
+              <do_if value="$stn.defencenpc.exists">
+                <set_value name="global.$X4MPEqSeqDefNpcHad" operation="add" exact="1" />
+              </do_if>
+              <do_if value="not $stn.defencenpc.exists">
+                <create_cue_actor name="$defOff" cue="this">
+                  <select tags="tag.defence" />
+                  <owner exact="$stn.owner" />
+                </create_cue_actor>
+                <do_if value="$defOff?">
+                  <assign_control_entity object="$stn" actor="$defOff" post="controlpost.defence" transfer="true" />
+                  <set_value name="global.$X4MPEqSeqOfficer" operation="add" exact="1" />
+                  <remove_cue_actor actor="$defOff" cue="this" />
+                  <remove_value name="$defOff" />
+                </do_if>
+                <do_else>
+                  <set_value name="global.$X4MPEqSeqOfficerFail" operation="add" exact="1" />
+                </do_else>
+              </do_if>
+            </do_if>
+          </do_for_each>
+        </do_if>
+        <set_value name="global.$X4MPEqSeqDone" exact="1" />
+        <debug_text text="'X4MP: station sequence equipment pass done'" chance="100" />
+      </actions>
+    </cue>
+
+    <!-- ============================================================
+         STATION VITALS SYNC (doc 4 section 4.4) - added 2026-09-18
+
+         Host -> client, one row per change: "idx,hullPct,shieldPct,state".
+         The DLL raises x4mp_station_vitals, x4mp_bridge.lua turns it into
+         AddUITriggeredEvent('X4MP_StationVitalsSync','vitals',{4 numbers}) and
+         this cue writes the host's ABSOLUTE values.
+
+         set_object_hull / set_object_shield take percentages (common.xsd: "Set
+         an object's hull value (percentage)") - the same unit the DLL reads with
+         GetComponentData("hullpercent") and the same pattern as the NPC vitals
+         cue (x4mp_testworld.xml:2059).
+
+         hull/shield -1 means "leave unchanged" (the DLL already decided what is
+         worth writing); state 3 means "the host's station is gone": the hero is
+         pulled out FIRST, then the station is destroyed - destroy_object is
+         IRREVERSIBLE (doc 3 section 10.8i), which is exactly why the client
+         never decides this on its own, it only mirrors (doc 4 invariant I2).
+
+         The `?` guard on the list slot is the same discipline as
+         global.$X4MPNpcList.{$lid}? (x4mp_testworld.xml:2021): a destroyed
+         station leaves an empty hole so every later row keeps its index.
+
+         Not module-gated on purpose (the cue body is inert when the station list
+         is empty), so a future world with stations of its own can raise the same
+         event without touching this file's module attribute.
+         ============================================================ -->
+    <cue name="X4MP_StationVitals" instantiate="true">
+      <conditions>
+        <event_ui_triggered screen="'X4MP_StationVitalsSync'" control="'vitals'" />
+      </conditions>
+      <actions>
+        <set_value name="$idx"    exact="event.param3.{1}" />
+        <set_value name="$hull"   exact="event.param3.{2}" />
+        <set_value name="$shield" exact="event.param3.{3}" />
+        <set_value name="$state"  exact="event.param3.{4}" />
+        <do_if value="global.$X4MPStationList.{$idx}?">
+          <do_if value="$hull ge 0">
+            <!-- 2026-09-25 (run #21-V)：站级也走引擎的伤害原语（先在目标更低时按差值施加），
+             再保留 set_object_hull 做绝对值修正 —— 两者都生效也不会叠加过量。 -->
+        <!-- 2026-09-25 (run #21-W) 单位修正：hullpercentage 是**百分数**(0..100)。
+             原生 crisis_xenon_khaak_combo.xml:1947 用 "$LeadShip.hullpercentage le 69" 判断
+             "快撑不住了" ⇒ 69 就是 69%。上一版按分数换算 ⇒ 客户端一进游戏站就被打掉 93%
+             (日志: station vitals applied idx=3 hull=100.00 ... local was 7.00/0.00)。
+             现公式量纲自洽：damage = (当前% - 目标%) * 当前绝对血 / 当前% -->
+        <!-- ============================================================
+             2026-09-25 (run #21-AB) 删除: 这里原本有一条站级 apply_attackstrength
+             ("按差值施加伤害")。它是**凭空制造伤害**的来源:
+               · 站容器的百分比是引擎**派生值**, 两端会小幅震荡(实测 31% vs 32%);
+               · 于是每次推送都按差值"打"一次 ⇒ **反复累加**;
+               · 引擎再把容器受到的伤害分配到模块上 ⇒ 模块被这些**不是武器打出**的
+                 伤害逐个击杀 —— 用户看到的就是"一架小飞机一次攻击毁掉三个模块"。
+             结论: 容器不施加伤害, 只保留下面那条**绝对值**修正(幂等, 不累加);
+             模块的击杀必须由主机引擎自己累积的真实伤害决定。
+             ============================================================ -->
+        <set_object_hull object="global.$X4MPStationList.{$idx}" exact="$hull" />
+        <set_value name="global.$X4MPStnVitalsSeen" operation="add" exact="1" />
+            <!-- 2026-09-21（run #21-J）：**不再把整站模块 clamp 到同一个值**。
+                 用户视角（正确）：站的伤害是"模块血量"，模块各自有很高的 HP，一个站要炸
+                 得等全部模块被摧毁；炮塔挂在模块上，模块没了炮塔也没了。
+                 旧做法（最差模块 → 写给所有模块）会让整站 40~90 个模块一起掉血、
+                 站"均匀地"过快爆炸 —— 已废弃。
+                 现在：
+                   · 容器 hull 照写（上面那行，仅为存档/UI 一致）；
+                   · 模块血量由【按模块】通道写：DLL 发 x4mp_station_module_hull
+                     → cue X4MP_StationModuleHull（见下方）→ 只写被命中的那一个模块；
+                   · 主机把每站模块按 "X4MP STN <idx>#<k>" 命名并放进
+                     global.$X4MPStationMods.{idx}，两端用同一个 k 做键。 -->
+          </do_if>
+          <do_if value="$shield ge 0">
+            <set_object_shield object="global.$X4MPStationList.{$idx}" exact="$shield" />
+          </do_if>
+          <do_if value="$state == 3">
+            <!-- 2026-09-21 fix: vanilla always references a library UNQUALIFIED
+                 (<run_actions ref="IsMilitaryObject"/> - cinematiccamera.xml:31 etc.).
+                 The old ref="md.X4MP_Stations.X4MP_StationEvacHero" did not resolve,
+                 which produced two MD errors per destroy (client uidata.xml
+                 20:19:50 / 20:20:06: "Property lookup failed: md.X4MP_Stations.
+                 X4MP_StationEvacHero") and the hero was never pulled out. -->
+            <run_actions ref="X4MP_StationEvacHero">
+              <param name="Station" value="global.$X4MPStationList.{$idx}" />
+            </run_actions>
+            <debug_text text="'X4MP: destroy row applied idx=' + $idx" chance="100" />
+            <destroy_object object="global.$X4MPStationList.{$idx}" explosion="true" />
+          </do_if>
+        </do_if>
+        <do_else>
+          <debug_text text="'X4MP: station vitals for empty slot ' + $idx" chance="10" />
+        </do_else>
+      </actions>
+    </cue>
+
+    <!-- Client only, doc 4 section 4.6 V2 (added 2026-09-18): the local mirror
+         station fires at the peer hero's replica ("X4MP Ghost"), which would
+         otherwise be reported up the hero damage lane and applied to the host's
+         REAL hero a second time. The DLL raises x4mp_ghost_vitals with the host's
+         authoritative values ("hull,shield", -1 = leave unchanged) and this cue
+         writes them back. Numbers only in the table - the 10.8l.7 rule. -->
+    <cue name="X4MP_StationGhostVitals" instantiate="true">
+      <conditions>
+        <event_ui_triggered screen="'X4MP_GhostSync'" control="'vit'" />
+      </conditions>
+      <actions>
+        <do_if value="global.$X4MPGhostShip?">
+          <do_if value="event.param3.{1} ge 0">
+            <set_object_hull object="global.$X4MPGhostShip" exact="event.param3.{1}" />
+          </do_if>
+          <do_if value="event.param3.{2} ge 0">
+            <set_object_shield object="global.$X4MPGhostShip" exact="event.param3.{2}" />
+          </do_if>
+        </do_if>
+      </actions>
+    </cue>
+
+    <!-- ============================================================
+         按模块写血（2026-09-21 · run #21-J · 用户要求"站血按模块掉"）
+
+         DLL 侧 raise_lua("x4mp_station_module_hull", "idx,modIdx,hull")
+           → ui\x4mp_bridge.lua → AddUITriggeredEvent('X4MP_StationModuleSync','mod',{3 numbers})
+           → 本 cue → **只写被命中的那一个模块**。
+
+         模块引用来自 global.$X4MPStationMods.{idx}（S3 里建好；顺序 = 模块名里的 k，
+         两端因此共享同一个键）。`$hull ge 0` 与 vitals 通道同义：-1 = 不改。
+
+         ★ 这是"站按模块掉血"的落点：按原版模型，站要炸就得**全部模块被摧毁**，
+           而炮塔挂在模块上 —— 模块没了，它上面的炮塔也一起没了（见 doc 4 §13.12）。
+         ============================================================ -->
+    <cue name="X4MP_StationModuleHull" instantiate="true">
+      <conditions>
+        <event_ui_triggered screen="'X4MP_StationModuleSync'" control="'mod'" />
+      </conditions>
+      <actions>
+        <set_value name="$idx"  exact="event.param3.{1}" />
+        <set_value name="$m"    exact="event.param3.{2}" />
+        <set_value name="$hull" exact="event.param3.{3}" />
+        <do_if value="global.$X4MPStationMods.{$idx}? and $hull ge 0">
+          <do_if value="global.$X4MPStationMods.{$idx}.{$m}?">
+            <set_object_hull object="global.$X4MPStationMods.{$idx}.{$m}" exact="$hull" />
+          </do_if>
+          <do_else>
+            <debug_text text="'X4MP: module hull for a missing module ' + $idx + '#' + $m"
+                        chance="10" />
+          </do_else>
+        </do_if>
+      </actions>
+    </cue>
+
+    <!-- ============================================================
+         P0-1（2026-09-21，技术文档5 §5）：客机的个人行为（停靠 / 离站 / 接近）
+
+         为什么不由 MD 直接告诉 DLL：本 SDK **没有 Lua/MD → native 的调用通道**
+         （已核对 SDK：唯一的桥是 native → raise_lua → AddUITriggeredEvent）。
+         所以"我的玩家刚停靠"这件事只能由**客机 DLL 观察自己的世界**得出：
+         object_docked / object_undocked 事件（type 282 / 311）+ 每秒一次到已映射
+         空间站的距离判定（进 3 km / 出 4 km，迟滞防抖），只上报**转变**那一行。
+         主机收到后由 DLL raise 到本 cue —— 主机自己永远看不到客机的机库。
+
+         payload：kind, keyType, id, modIdx（四个数字）
+           kind    1=停靠 2=离站 3=进入3km 4=离开4km
+           keyType 0=无键 1=空间站(id=站序号, modIdx=模块k) 2=NPC(id=lid) 3=模块
+         关卡用法示例：客机停靠到 STN 2 → 下一阶段。读 global.$X4MPPeerEvent*。
+         ============================================================ -->
+    <cue name="X4MP_PeerEvent" instantiate="true">
+      <conditions>
+        <event_ui_triggered screen="'X4MP_PeerEventSync'" control="'ev'" />
+      </conditions>
+      <actions>
+        <set_value name="$kind" exact="event.param3.{1}" />
+        <set_value name="$key"  exact="event.param3.{2}" />
+        <set_value name="$id"   exact="event.param3.{3}" />
+        <set_value name="$mod"  exact="event.param3.{4}" />
+        <set_value name="global.$X4MPPeerEventKind" exact="$kind" />
+        <set_value name="global.$X4MPPeerEventKey"  exact="$key" />
+        <set_value name="global.$X4MPPeerEventId"   exact="$id" />
+        <set_value name="global.$X4MPPeerEventMod"  exact="$mod" />
+        <debug_text text="'X4MP: peer event kind=' + $kind + ' key=' + $key + ' id=' + $id + ' mod=' + $mod"
+                    chance="100" />
+      </actions>
+    </cue>
+
+    <!-- ============================================================
+         P0-2（2026-09-21，技术文档5 §5）：主机权威时钟
+
+         两端的游戏时钟各走各的，阶段计时不能各算各的。主机每 2 秒广播一次
+         GetCurrentGameTime()（SDK x4_game_func_list.inc:401），客机 DLL 算出
+         offset = 主机 − 本地 并 raise 到本 cue。
+
+         关卡里"3 分钟后关闸"这类计时，在客机上写成
+           (player.age + global.$X4MPHostTimeOffset)
+         就与主机的钟一致 —— 这就是 P0-2 对"两端计时漂移"的答案。
+         `stage` 字段已随包预留，当前恒 0：本 SDK 无 MD → native 通道，主机的 MD
+         无法把阶段号送进 DLL（doc 5 §5 给了两条收口方案）。
+
+         payload：hostTime, offset, stage
+         ============================================================ -->
+    <cue name="X4MP_HostTime" instantiate="true">
+      <conditions>
+        <event_ui_triggered screen="'X4MP_HostTimeSync'" control="'clock'" />
+      </conditions>
+      <actions>
+        <set_value name="$host"  exact="event.param3.{1}" />
+        <set_value name="$off"   exact="event.param3.{2}" />
+        <set_value name="$stage" exact="event.param3.{3}" />
+        <set_value name="global.$X4MPHostTime"       exact="$host" />
+        <set_value name="global.$X4MPHostTimeOffset" exact="$off" />
+        <set_value name="global.$X4MPStage"          exact="$stage" />
+      </actions>
+    </cue>
+
+    <!-- ============================================================
+         P0 模块登记表（2026-09-21 夜 · run #21-N）：**每次进档都必须重建**
+
+         为什么必须单独一个 cue：这张表（global.$X4MPStationMods）原来和"命名"一起
+         长在 X4MP_EquipStationsSeq 的 `$stn.plannedconstruction.sequence` 分支里
+         （文件上部，约 L375），而那个 gate **只对"本次会话新建的站"成立**：
+           · 从存档读回来的站没有 plannedconstruction ⇒ 整个分支被跳过 ⇒
+             表是空的，但**模块名早在上一次会话就写进存档了** ⇒ DLL 按名字解析出的 k
+             依然有效，MD 的 .{idx}.{m} 却是空的。
+           · 于是每一行 set_object_hull 都被 `do_if ...?` 吃掉、什么也没发生。
+             run #21-M 实测就是这个形状：主机 234 行
+               PEER DAMAGE applied to station idx=2 MODULE 3 hull 100.00 -> 99.00
+             **前值永远是 100**（写入无效、下一轮又读到 100 ⇒ 又把 100 回推给客机 ⇒
+             99/100 乒乓），而客机本地已经掉到 99 —— 用户看到的就是"客户端掉了、
+             主机还是 100%"。乒乓本身也是那晚卡顿的来源之一。
+           · 同一个 gate 还解释了更早的"Xenon 船厂仍然有无人机"：无人机处置
+             （set_drone_armed / set_equipment_wares_excluded）也在那个分支里。
+
+         本 cue 无 conditions + 12 s 延时 ⇒ 每次（新局或读档）跑一次，动作幂等：
+         重数模块、重排 .{n} 数组，并把名字**重写**成同一套 k ⇒ 名字与表永远同源，
+         即使枚举顺序在新会话里变了也不会错位（另一端同理，两边各自与自己的表一致）。
+
+         `global.$X4MPModsRegistry` 是给存档取证用的计数器（x4mp_savecheck.ps1）。
+         ============================================================ -->
+    <cue name="X4MP_StationModuleRegistry" module="x4mp_stations">
+      <delay exact="4s" />
+      <actions>
+        <set_value name="global.$X4MPModsStnCounter" exact="0" />
+        <set_value name="global.$X4MPModsRegistry"   exact="0" />
+        <set_value name="global.$X4MPStationMods"    exact="[]" />
+        <set_value name="global.$X4MPStationComps"   exact="[]" />
+        <set_value name="global.$X4MPStationCompTurrets" exact="0" />
+        <set_value name="global.$X4MPStationCompShields" exact="0" />
+        <do_if value="global.$X4MPStationList?">
+          <do_for_each name="$stn" in="global.$X4MPStationList">
+            <do_if value="$stn?">
+              <set_value name="global.$X4MPModsStnCounter" operation="add" exact="1" />
+              <set_value name="$i" exact="global.$X4MPModsStnCounter" />
+              <set_value name="$k" exact="0" />
+              <!-- ============================================================
+                   2026-09-22 (run #21-S)：**每个模块单独赋值**
+
+                   为什么不能 `global.$X4MPStationMods.{$i} = $regMods`（整份列表赋进去）：
+                   两边存档（01:40）实测 —— $X4MPModsRegistry = 3、模块名 X4MP STN 2# 有 5 条，
+                   但 **X4MPStationMods 在存档里出现 0 次**（而同样写法的 $X4MPStationList
+                   是 type="list" 正常存在）。也就是说：局部列表赋进全局表**不进状态**，
+                   表在下次读档后是空的 ⇒ 所有写模块的动作（set_object_hull /
+                   apply_attackstrength）目标都是 null ⇒ 179 次 "PEER DAMAGE VERIFY
+                   … -> WRITE LOST"，而客机→主机与主机→客机的模块伤害全部失效。
+                   （这也解释了为什么"clamp 时代"站级能成功：站级用的是
+                   $X4MPStationList.{$idx}，那是一个**对象**，对象引用是有效的。）
+
+                   所以这里逐模块写 global.$X4MPStationMods.{i}.{k} = 该模块对象，
+                   k 与模块名里的 #k 由同一个循环产生 ⇒ 名字与表永远同源。
+                   ============================================================ -->
+              <find_object_component name="$regMods" object="$stn" class="class.module"
+                                     checkoperational="false" multiple="true" recursive="true" />
+              <do_if value="$regMods?">
+                <do_all exact="$regMods.count" counter="$m">
+                  <set_object_name object="$regMods.{$m}" name="'X4MP STN ' + $i + '#' + $k" />
+                  <set_value name="global.$X4MPStationMods.{$i}.{$k}" exact="$regMods.{$m}" />
+                  <!-- ============================================================
+                       2026-09-25 (run #21-AD) Phase 1：模块上的**表面元素**（炮塔/护盾发生器）
+                       也要有自己的"共享键"名字 —— 它们是半独立组件：各自有血量、可被单独摧毁，
+                       同时随所在模块一起被摧毁。命名方案与模块同源（名字即键）：
+                         X4MP TUR <idx>#<k>#<c>   第 k 号模块上的第 c 座炮塔
+                         X4MP SHD <idx>#<k>#<c>   第 k 号模块上的第 c 台护盾发生器
+                       并把对象**逐个**写进 global.$X4MPStationComps.{i}.{k}.T{c}/S{c}
+                       （教训：整份列表赋值不进状态，必须逐个赋值 —— 见 21-S）。
+                       c 是本次枚举顺序，两端由同一段代码产生 ⇒ 天然一致。
+                       ============================================================ -->
+                  <find_object_component name="$regTur" object="$regMods.{$m}" class="class.turret"
+                                         checkoperational="false" multiple="true" recursive="true" />
+                  <do_if value="$regTur?">
+                    <do_all exact="$regTur.count" counter="$c">
+                      <set_object_name object="$regTur.{$c}" name="'X4MP TUR ' + $i + '#' + $k + '#' + $c" />
+                      <set_value name="global.$X4MPStationComps.{$i}.{$k}.T{$c}" exact="$regTur.{$c}" />
+                    </do_all>
+                    <set_value name="global.$X4MPStationCompTurrets" operation="add" exact="$regTur.count" />
+                  </do_if>
+                  <find_object_component name="$regShd" object="$regMods.{$m}" class="class.shieldgenerator"
+                                         checkoperational="false" multiple="true" recursive="true" />
+                  <do_if value="$regShd?">
+                    <do_all exact="$regShd.count" counter="$c">
+                      <set_object_name object="$regShd.{$c}" name="'X4MP SHD ' + $i + '#' + $k + '#' + $c" />
+                      <set_value name="global.$X4MPStationComps.{$i}.{$k}.S{$c}" exact="$regShd.{$c}" />
+                    </do_all>
+                    <set_value name="global.$X4MPStationCompShields" operation="add" exact="$regShd.count" />
+                  </do_if>
+                  <set_value name="$k" operation="add" exact="1" />
+                </do_all>
+                <set_value name="global.$X4MPModsRegistry" operation="add" exact="1" />
+              </do_if>
+            </do_if>
+          </do_for_each>
+        </do_if>
+      </actions>
+    </cue>
+
+    <!-- ============================================================
+         站/模块伤害（2026-09-21 夜 · run #21-Q）：改用引擎自己的伤害原语落血
+
+         为什么换掉 set_object_hull —— 实测 179 行：
+           PEER DAMAGE VERIFY idx=2 module=3 uid=64654 name='X4MP STN 2#3'
+             want=99.00 moduleNow=100.00 stationNow=100.00 -> WRITE LOST
+         对象 uid 与**名字**都对、写目标也对，但什么也没落地（连站容器 fallback
+         也每次都读回 100）。而幽灵船那条 lane 一直用 <apply_attackstrength> ——
+         那是引擎自己的伤害入口（common.xsd："Apply damage from an attack to
+         target, returns if target was killed"），百分数→绝对值的换算照抄
+         md\x4mp_testworld.xml:126-131（因子 = hull / hullpercentage = 满血点数）。
+
+         payload：idx, modIdx, wantHullPct（目标绝对百分比）
+         只在"{目标当前 > 目标值}"时开火，差值为正 ⇒ damage-only，永不回血；
+         站要炸仍须**全部模块被打掉**（与"站按模块掉血"的原版模型一致）。
+         ============================================================ -->
+    <cue name="X4MP_StationModuleDamage" instantiate="true">
+      <conditions>
+        <event_ui_triggered screen="'X4MP_StationModuleDamageSync'" control="'dmg'" />
+      </conditions>
+      <actions>
+        <set_value name="$idx"  exact="event.param3.{1}" />
+        <set_value name="$m"    exact="event.param3.{2}" />
+        <set_value name="$abs"  exact="event.param3.{3}" />
+        <set_value name="global.$X4MPModDmgSeen" operation="add" exact="1" />
+        <set_value name="$mod"  exact="global.$X4MPStationMods.{$idx}.{$m}" />
+        <!-- 2026-09-22（run #21-T）：DLL 现在直接送**绝对伤害点数**（它自己有
+             hull 与 hullpercent 两个读数可换算），这里不再碰 $mod.hullpercentage ——
+             模块很可能不暴露该 MD 属性，一旦是 null，守卫 `gt 0` 会让整条 cue
+             静默跳过（历次 "什么也没发生" 的形状）。 -->
+        <set_value name="$stn" exact="global.$X4MPStationList.{$idx}" />
+        <do_if value="$stn? and $mod? and $abs gt 0">
+          <!-- 2026-09-25 (run #21-V) 关键修正：原生打模块的写法是 object=父对象 + module=该模块
+               (x4ep1_mentor_subscription.xml:9116：object=event.param.{1}.object module=event.param.{1})。
+               把模块本身当 object 传时：不报错、也不掉血 —— 实测事件到 MD 35 次、动作执行 35 次、
+               存档里模块仍是满血，这就是 179 次 WRITE LOST 的真身。 -->
+          <apply_attackstrength object="$stn"
+                                module="$mod"
+                                hullshield="0"
+                                hullonly="$abs"
+                                shieldonly="0"
+                                hullnoshield="0" />
+          <set_value name="global.$X4MPModDmgApplied" operation="add" exact="1" />
+        </do_if>
+      </actions>
+    </cue>
+
+    <!-- ============================================================
+         【已撤除】站/模块登记表"按宏重建"cue（run #21-R，2026-09-22 凌晨撤回）
+
+         为什么撤回 —— 这是我自己造成的一次回归，教训值得写下来：
+         那个 cue 的第一句是 `<set_value name="global.$X4MPStationList" exact="[]" />`
+         （先清空再按 `find_object ... macro=` 重建）。但 `find_object` 的 `macro=`
+         过滤无法在离线环境验证；一旦它不成立（或 `space="player.galaxy"` 不覆盖
+         空白世界那个星区），**表就被清空了而且没重建** ⇒
+           · `X4MP_StationVitals` 写 global.$X4MPStationList.{$idx} → 空 ⇒ 主机→客机
+             的站血同步**死掉**（正是用户当时报的"主机打船厂也同步不到客机"）；
+           · `X4MP_StationModuleHull` / `X4MP_StationModuleDamage` 写
+             global.$X4MPStationMods.{idx}.{m} → 空 ⇒ 客机→主机的模块伤害同样死掉，
+             `PEER DAMAGE VERIFY … -> WRITE LOST` 永远不变。
+         而在这之前这些表是好的（clamp 时代用户亲眼看到客机站血跟着动 ⇒
+         MD 的 set_object_hull 本来就能工作，对象引用也确实随存档存活）。
+
+         结论：**不要清空一张我们无法在离线环境里重建的表**。要重建，必须先保证
+         查找成功（先 find 到、再赋值），或者干脆不动它。这条 cue 已整体撤除，
+         恢复到"表由建站那次会话建立、随后一直有效"的状态。
+         ============================================================ -->
+
+  </cues>
+
+  <!-- ============================================================
+       STATION DESTROY: pull the local hero out (doc 4 section 5.3)
+
+       destroy_object is irreversible, so a hero docked inside the station when
+       the host's destroy row arrives would either die with it or be left in the
+       wreck. The library is called from X4MP_StationVitals above, BEFORE the
+       destroy, and is a no-op for a hero who is not docked.
+
+       Why the parent chain decides it: a docked ship's parent is the dockingbay
+       (or the pier/station container for larger ships) - vanilla reads it the
+       same way in npc_state_machines.xml:2509
+       ($NPC.assignedcontrolled.parent.isclass.dockingbay), and `isclass.zone`
+       on the same attribute is the free-flying case. The test is deliberately a
+       non-destructive superset: undock + warp out are only ever reached when the
+       hero is docked SOMEWHERE, so a hero flying in open space is never moved
+       (doc 4 admits the exact "is the hero inside THIS station" wording still
+       needs a probe; this form cannot misfire in the common case, and the warp
+       target is the station the host just destroyed).
+
+       `undock` takes the mandatory `ship=` attribute (common.xsd:37680), NOT
+       `object=` - the doc's draft snippet used `object=` and would not compile.
+       ============================================================ -->
+  <library name="X4MP_StationEvacHero" purpose="run_actions">
+    <params>
+      <param name="Station" default="null" />
+    </params>
+    <actions>
+      <do_if value="player.ship and player.ship.parent and (player.ship.parent.isclass.dockingbay or player.ship.parent.isclass.pier or player.ship.parent.isclass.station)">
+        <undock ship="player.ship" />
+        <warp object="player.ship" sector="player.sector">
+          <position object="$Station" x="0" y="0" z="2500" />
+        </warp>
+        <debug_text text="'X4MP: hero evacuated from a destroyed station'" chance="100" />
+      </do_if>
+    </actions>
+  </library>
+</mdscript>

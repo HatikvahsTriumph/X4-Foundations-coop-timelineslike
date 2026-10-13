@@ -1,0 +1,25 @@
+# Build artefacts and local junk - never commit these
+*.zip
+*.7z
+*.log
+*.bak
+*.bak_*
+*_live_*.dll
+.pre_halfres.bak
+extensions/_x4mp_removed_*/
+_x4mp_removed_*/
+
+# Visual Studio / CMake output
+.vs/
+build/
+out/
+CMakeFiles/
+CMakeCache.txt
+*.vcxproj.user
+*.obj
+*.pdb
+
+# OS / editor
+Thumbs.db
+desktop.ini
+*.swp

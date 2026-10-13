@@ -1,0 +1,4 @@
+<?xml version="1.0" encoding="utf-8"?>
+<content id="x4mp_test" name="X4MP Test World" description="Blank test world with two ships for multiplayer testing" author="X4MP" version="0.1.1" date="2026-09-29" save="0">
+  <dependency version="100" />
+</content>

@@ -1,0 +1,1520 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  ============================================================================
+  X4MP 关卡：梦幻海洋·三波守卫战        md\x4mp_level_boron.xml
+  设计依据：D:\x49.0\X4MP\技术文档6_关卡设计_梦幻海洋守卫战.md
+  ============================================================================
+  本文件是**骨架第一版**，只用本项目已验证的 MD 原语：
+    create_station / create_ship / set_object_name / set_known / set_value /
+    do_all / do_if / delay / find_object_component / debug_text / event_* /
+    create_mission / set_objective / remove_mission（任务/目标 UI，2026-09-26 已接入）
+
+  设计要点（与文档 6 一致，2026-09-26 实机校正）：
+    * 星区 = **梦幻海洋**（Cluster_604_Sector001，由 gamestart 定位）；布景用 sector="player.sector"。
+    * 布景位置 = **绝对星区坐标**（两端完全一致 ⇒ MP 对齐）；两端玩家由 <teleport_player>
+      放到场景旁：**主机 z=-300 / 客机 z=+300 ⇒ 相距 600 m，不重叠**（用户要求）。
+    * 座舰：主机 = Boron 巨鳐（满配）；**客机 = Argon 巨兽 改进型 Behemoth E（满配）**。
+      ★用户规则：**玩家这边最多两艘 L 驱逐舰** ⇒ 不再生成场边备用舰，Argon 增援改 M 级地狱犬。
+    * **所有满配都必须显式 faction=**（generate_loadout 默认按"船主阵营"找装备，玩家阵营里没有
+      Boron/Xenon(DLC) 件 ⇒ 船会变成没引擎/没武器的空壳；舰船用 object=，站点用 sequence=/index=）。
+    * **时间基准 = 主机时钟**（`player.age + global.$X4MPHostTimeOffset` + ClockOk 闸门）
+      ⇒ 客户端先进场也不会提前放布景/波次。
+    * **MD 生成的船都要补 pilot + 满配**（没 pilot 不动、没装备没引擎没武器 —— 实测教训）。
+    * Boron 贸易站 = macro.station_bor_tradestation_base_01_macro + 计划 bor_tradestation（前方 8 km）。
+    * Xenon 站 = macro.station_xen_defence_base_01_macro + 计划 xen_defence（**防御站**，用户指定），后方 80 km（满足"≥80 km"）；
+      ⇒ 炮塔/护盾靠 1.2a 的「loadout 装备 + 成型 + finalisation」三步填出来（原版 finalisestations.xml 路径）：
+        **`create_station` 本身不给装备**（只给模块树），这是"站建好了却没有炮塔"的根因。
+    * 三波间隔 30 秒，**上一波没清完也照常推进**；
+    * K 被摧毁 → Argon 5 × 地狱犬（M 级）入场；
+    * 引力子炮塔（Xenon L 重炮塔 `turret_xen_l_plasma_01_mk1_macro`）计数在
+      `global.$X4MPTurretLeft`，归零后才进入"摧毁 Xenon 空间站"阶段。
+
+  ★ 同步层假设：所有 create_* 由**两端各跑一份**（同一份 md）⇒ 必须保证两端生成
+    的东西一致（同宏、同 faction、同位置表达式）。
+  ============================================================================ -->
+<mdscript name="X4MP_LevelBoron" xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance" xsi:noNamespaceSchemaLocation="md.xsd">
+  <cues>
+
+    <!-- 0) 初始化（每次开局/读档），先等 20 秒再布景 -->
+    <cue name="X4MP_Level_Init" module="x4mp_level_boron" instantiate="true">
+      <conditions>
+        <event_game_started />
+      </conditions>
+      <actions>
+        <!-- ★2026-09-26 修正（实锤：存档里出现 "X4MP LVL K" × 3 ⇒ 场景被重复生成）：
+             event_game_started **在读档时也会触发**，而这里原来无条件把下面这些标记清 0
+             ⇒ 每次读档 Setup cue 的守卫 global.$X4MPLevelActive lt 1 都会成立 ⇒ 整个场景
+             （站 + 舰队 + 三波 + K）重造一遍，世界越读越"胖"。
+             现在改成：**只有当"保护目标"还不存在时**才初始化（读完档它一定存在）。
+             新局：这些 global 未定义 ⇒ 正常初始化 ⇒ 正常布景。
+             读档：$X4MPLevelTradeStn 已存在 ⇒ 跳过初始化 ⇒ 已有的 Active/Wave/… 原样保留
+                   ⇒ Setup 与三波都会被守卫挡住，不再重复生成。 -->
+        <do_if value="not global.$X4MPLevelTradeStn?">
+        <!-- 客机专属：座舰已换成 Argon 巨兽 改进型 的标记（见 X4MP_Level_ClientXenonShip） -->
+        <set_value name="global.$X4MPLevelClientShipDone" exact="0" />
+        <!-- 主机时钟是否已就绪：客机等第一个时钟包、主机在 +6 s 自己置位。
+             布景/三波都用它做闸门，避免"客户端先进场就先把波次放出来"。 -->
+        <set_value name="global.$X4MPLevelClockOk" exact="0" />
+        <set_value name="global.$X4MPLevelActive"       exact="0" />
+        <set_value name="global.$X4MPLevelWave"         exact="0" />
+        <set_value name="global.$X4MPTurretLeft"        exact="0" />
+        <set_value name="global.$X4MPLevelArgonIn"      exact="0" />
+        <set_value name="global.$X4MPLevelStationDown"  exact="0" />
+        <!-- 本关卡 NPC 的同步登记序号。★2026-09-27 [BOTH] 方案落地后**不再用它命名**：
+             命名改用 global.$X4MPNpcList.count + 1（见各处 create_ship 后的 9 行）——
+             "列表下标 = 名字里的 lid" 是三条同步 lane（位姿/血量/摧毁）寻址的硬前提，
+             而创建批次可能被跳过（波次带 active/wave 闸门）⇒ 只有"当前列表长度 + 1"
+             才能在两端跳过同样批次时都算出同一个 lid。这里置 1 只为兼容旧存档语义。 -->
+        <set_value name="global.$X4MPLevelNpcNext"      exact="1" />
+        <!-- 客机就绪闸门（见 X4MP_Level_PeerSeen_Spawn / PeerSeen_WorldGo /
+             PeerReadyTimeout / ReadyLatch）：
+               $X4MPLevelPeerSeen = 收到"客机已加入"信号（0.2a / 0.2a2 任一）
+               $X4MPLevelReady    = PeerSeen 且 ClockOk（0.2c Latch）—— 真正放行
+                                    布景 / 幽灵 / 波次的那一个 ✓ -->
+        <set_value name="global.$X4MPLevelPeerSeen"      exact="0" />
+        <set_value name="global.$X4MPLevelReady"         exact="0" />
+        <!-- ★2026-09-27（run #23）：Ready 置 1 的时刻（player.age，单位秒）。幽灵 cue 用
+             它算"等对端 macro"的窗口（最多 20 s），超时就用本关卡的兜底 macro，别让玩家干等。 -->
+        <set_value name="global.$X4MPLevelReadyAt"       exact="0" />
+        <!-- ★2026-09-27（run #23）：对端自己那艘座舰的 macro 名（DLL 每秒广播一条
+             x4mp_peer_hero，见 0.16 cue）。undefined / '' = 还没收到。 -->
+        <set_value name="global.$X4MPPeerHeroMacro"      exact="''" />
+        <set_value name="global.$X4MPLevelSolo"          exact="0" />
+        <!-- ★2026-09-27：本端是不是客机（收到过主机时钟包 ⇒ 是客机；时钟包只发客机）。
+             客机换舰因此必须用**周期** cue 独立执行，见 X4MP_Level_ClientShipSwap -->
+        <set_value name="global.$X4MPLevelIsClient"      exact="0" />
+        <!-- ★2026-09-27 客机冻结（用户要求"主机断联后客机必须像冻结一样"）：
+               $X4MPLevelClockAge = 最后一次收到主机时钟包时的 player.age（心跳）
+               $X4MPLevelPeerDown = 1 ⇒ 主机离线 ⇒ X4MP_Level_Freeze 把客机座舰钉住、
+                                    傀儡 lane 因为收不到快照本来就停在原地
+             判据只用**时钟包**（客机专属 lane，DLL 零改动），见 X4MP_Level_PeerWatch。 -->
+        <set_value name="global.$X4MPLevelPeerDown"      exact="0" />
+        <set_value name="global.$X4MPLevelClockAge"      exact="0" />
+        <!-- ★2026-09-27 客机座舰的"摆放版本"（2 = 锚点 + 2 km 绝对坐标；见换舰 cue 的修补分支） -->
+        <set_value name="global.$X4MPLevelClientShipPlace" exact="0" />
+        <!-- ★2026-09-27 "客机场景已站住"（DLL 的 go / 客机的 WORLD_READY）。
+             只有**主机**需要等它：Setup 的闸门写成 (IsClient OR PeerScene) —— 客机自己
+             先建景（否则主机没有"客机场景"可等，会成环），主机则必须等客机把场景立起来
+             （用户规则："客户端没进入就不许向后面进行"）。 -->
+        <set_value name="global.$X4MPLevelPeerScene"      exact="0" />
+        </do_if>
+        <do_if value="not global.$X4MPHostTimeOffset?">
+          <set_value name="global.$X4MPHostTimeOffset" exact="0" />
+        </do_if>
+        <!-- ★★★ 2026-09-27 坐标系统一（修"主机/客机镜面对称"）★★★
+             根因：`<safepos object="player.ship" .../>` 的 x/y/z 不是绝对坐标，而是**相对该对象、
+             并且随该对象的朝向旋转**的偏移 ⇒ 主机/客机各围着自己建景，还按各自船头方向转
+             ⇒ 两端看到的是两套"各自旋转过"的场景（用户截图：像镜面对称）✗
+             证据：① 原版 md\boarding.xml:619 `<safepos object="$Launcher" x="$LaunchPosX" z="-1m"/>`
+                     —— 登船舱必须出现在**登船船旁边**；若 x/y/z 是绝对值，它会跑到星区原点，荒谬。
+                   ② 本项目早先在这里用的是 `<position x="0" y="0" z="8000"/>`，玩家在
+                     (-30678, 0, -122754) ⇒ 距离 = 126.5 km ≈ 用户截图上的 "125.4 km" ✓
+                     ⇒ `<position>` 才是**绝对星区坐标**。
+             修法：布景**全部**改回 `<position>`（不带 object=）+ 把原点平移到
+             两端 gamestart 的出生点（同一个 zone001_cluster_604_sector001_macro）
+             ⇒ 两端布景落在**完全相同**的绝对坐标上 ✓（这是 MP 对齐的唯一正确做法）
+             锚点值来源（两端 DLL 日志逐位一致，可复现）：
+               DIAG own=(-30677.9, 0.0, -122754.3)
+             注意：若以后改 gamestart 的出生 zone，这三个常量要同步改。 -->
+        <do_if value="not global.$X4MPLevelAnchorX?">
+          <set_value name="global.$X4MPLevelAnchorX" exact="-30678.0" />
+          <set_value name="global.$X4MPLevelAnchorY" exact="0" />
+          <set_value name="global.$X4MPLevelAnchorZ" exact="-122754.0" />
+        </do_if>
+        <debug_text text="'X4MP LEVEL: init (new game only resets flags)'" chance="100" />
+      </actions>
+    </cue>
+
+    <!-- ===== 0.2 ★客机连接闸门（用户要求：客机没连上就不许开始）=====================
+         ★★★ 2026-09-27 实锤修正：判据**不能**只挂在 `X4MP_NpcSync/go` 上 ★★★
+         改之前这里只听 control='go'。go 是**旧傀儡世界握手**的最后一步：
+           DLL `release_universe()`（x4mp_native.cpp:2198-2204）要求
+             s_worldAnnounced > 0（主机已广播过傀儡行）**且** s_worldReady
+             （客机回报"每具傀儡都站住"）才 raise x4mp_universe_go。
+         新关卡（梦幻海洋守卫战）**不生成任何 `X4MP NPC n` 傀儡** ⇒ 两条都不成立
+         ⇒ go 永不触发 ⇒ 两端 $X4MPLevelReady 永远 0 ⇒ 主机地图全空、客机只剩换过的座舰。
+         实机证据（2026-09-26 18:56-18:59 双端 x4mp_native.log）：
+           host 18:57:34 "peer ready (game loaded) - the world may be born"
+                ⇒ 客机的 CLIENT_READY 已经送达 ✓ **网络层无罪**
+           host 18:57:37…18:59:11 "host sync alive=0 mapped=0"        ⇒ 本关没有傀儡
+           host 18:57:35 "station lane idle - no 'X4MP STN <n>' objects"
+                ⇒ 主机一处布景都没建（Setup 被 Ready=0 挡着）
+           host DIAG remote=(-30678.0,0.0,-120754.0)
+                ⇒ 客机座舰已在锚点 + 2 km（客机的 ClientXenonShip 靠**时钟**触发 ✓）
+         ★ 主机侧的"客机已加入"信号 = `X4MP_NpcSync/spawn`（本来就有、免费）：
+           x4mp_spawn_npc 在 DLL 里**只 raise 一处**（x4mp_native.cpp:5487），条件为
+             g_npc_stage == 1  **且**  (!g_asHost || s_clientReady.load())
+           而 g_npc_stage = g_asHost ? 1 : 2（x4mp_native.cpp:6078）
+           ⇒ **stage-1 只属于主机**，而且必须等 CLIENT_READY 才走（那之前每 2 s 打
+             "world held back - no CLIENT_READY from the peer yet"）
+           ⇒ **主机收到 spawn 事件 = 客机已连上** ✓（0.2a 因此是主机专用的就绪信号）
+         ★ 客机侧的"主机在线"证据 = **主机时钟包**（`X4MP_HostTimeSync/clock`）：
+           该事件只在客机触发（DLL flush_incoming_time_sync 开头 `if (rows.empty()
+           || g_asHost) return;`，x4mp_native.cpp:4502 附近）⇒ 0.15 的 ClientXenonShip
+           cue 里**同时置 ClockOk 与 PeerSeen** ✓
+           主机不在线 ⇒ 没有时钟包 ⇒ 客机什么都不建 ✓（与"客机没连上就不许开始"对称）
+         ⇒ 最终闸门 = PeerSeen（主机 ← spawn / 客机 ← clock；0.2a2 的 go 仅作兼容）
+                       **且** ClockOk ⇒ 0.2c 的 Latch 置 Ready
+         ========================================================================== -->
+
+    <!-- 0.2a 就绪信号 1/2：spawn —— **主机专属**（DLL 的 stage-1 分支只在主机跑，
+         而且必须先收到客机的 CLIENT_READY）⇒ 收到它就是"客机已加入" ✓ -->
+    <cue name="X4MP_Level_PeerSeen_Spawn" module="x4mp_level_boron" instantiate="true">
+      <conditions>
+        <event_ui_triggered screen="'X4MP_NpcSync'" control="'spawn'" />
+      </conditions>
+      <actions>
+        <do_if value="not global.$X4MPLevelPeerSeen? or global.$X4MPLevelPeerSeen lt 1">
+          <set_value name="global.$X4MPLevelPeerSeen" exact="1" />
+          <!-- ★2026-09-28（run #26d，用户实测：主机端看不到代表客机的幽灵）：
+               这是**真实**对端信号 ⇒ 撤销 30 s 单人兜底留下的 Solo 标记。
+               为什么必须撤：幽灵 cue 的守卫是 `not $X4MPLevelSolo`，而兜底在客机
+               读盘慢（实测 +44 s）时会先把 Solo 置 1 ⇒ 之后即使客机真的到了，
+               幽灵也永远不会被创建（旧行为，实测 ghostUid=0 整局）。 -->
+          <set_value name="global.$X4MPLevelSolo" exact="0" />
+          <debug_text text="'X4MP LEVEL: 世界就绪信号到（X4MP_NpcSync/spawn）⇒ 撤销单人兜底'" chance="100" />
+        </do_if>
+      </actions>
+    </cue>
+
+    <!-- 0.2a2 就绪信号 2/2：go = **客机场景已站住**（2026-09-27 起在本关卡真的会到！）===
+         go 来自 DLL 的 release_universe()，条件是收到客机的 WORLD_READY（"我的傀儡都站住了"）
+         且主机已广播过世界规模。在上一轮之前它在本关卡永远不触发（本关卡不生成
+         `X4MP NPC n` 傀儡行），本轮给 DLL 补了"[BOTH] 无 spawn 行世界"的握手 ⇒ go 恢复。
+         语义因此升级：**go = 客机的场景已经建好并站住**（不只是"客机进了游戏"）。
+         用户规则"客户端没进入就不许向后面进行" ⇒ **主机**的布景闸门用它（见 1) Setup）✓ -->
+    <cue name="X4MP_Level_PeerSeen_WorldGo" module="x4mp_level_boron" instantiate="true">
+      <conditions>
+        <event_ui_triggered screen="'X4MP_NpcSync'" control="'go'" />
+      </conditions>
+      <actions>
+        <set_value name="global.$X4MPLevelPeerScene" exact="1" />
+        <debug_text text="'X4MP LEVEL: 客机场景已站住（X4MP_NpcSync/go）⇒ 主机可以建景了'" chance="100" />
+        <do_if value="not global.$X4MPLevelPeerSeen? or global.$X4MPLevelPeerSeen lt 1">
+          <set_value name="global.$X4MPLevelPeerSeen" exact="1" />
+          <!-- ★run #26d：真实信号 ⇒ 撤销单人兜底（见 0.2a 的说明） -->
+          <set_value name="global.$X4MPLevelSolo" exact="0" />
+          <debug_text text="'X4MP LEVEL: 世界就绪信号到（X4MP_NpcSync/go）'" chance="100" />
+        </do_if>
+        <!-- ★run #26d：go 也是真实对端信号 ⇒ 无论 PeerSeen 是否已置，都要撤销 Solo -->
+        <set_value name="global.$X4MPLevelSolo" exact="0" />
+      </actions>
+    </cue>
+
+    <!-- 0.2c 就绪总闸（**唯一**把 Ready 置 1 的地方）：PeerSeen 且 ClockOk
+         ⇒ 放行布景 / 幽灵 / 三波。
+         用周期复检（checkinterval）而不是事件条件：两个信号到达的先后顺序不确定
+         （主机侧 spawn 早于时钟、客机侧时钟早于 spawn）⇒ 事件型条件必然漏判 ✓ -->
+    <cue name="X4MP_Level_ReadyLatch" module="x4mp_level_boron" instantiate="true" checkinterval="1s">
+      <conditions>
+        <check_all>
+          <check_value value="global.$X4MPLevelPeerSeen? and global.$X4MPLevelPeerSeen ge 1" />
+          <check_value value="global.$X4MPLevelClockOk? and global.$X4MPLevelClockOk ge 1" />
+        </check_all>
+      </conditions>
+      <actions>
+        <set_value name="global.$X4MPLevelReady" exact="1" />
+        <set_value name="global.$X4MPLevelReadyAt" exact="player.age" />
+        <debug_text text="'X4MP LEVEL: 客机已连接 + 时钟就绪 ⇒ 解除闸门，允许布景/幽灵/波次'" chance="100" />
+      </actions>
+    </cue>
+
+    <!-- ★2026-09-28（run #26）：**每次载入都跑**的对端状态复位。
+         上一版把这几行放在 Init 的 do_if（"保护目标不存在"）里 ⇒ 读档时整段被跳过 ⇒
+         存档里的 $X4MPLevelReady / PeerSeen / ClockOk / IsClient / Solo 原样带回来：
+           * 客机读档 ⇒ 立刻"就绪"（Ready=1）却可能根本没有主机 ⇒ 幽灵 cue 用旧存档里的
+             PeerHeroMacro 造出一条幽灵（用户报过的"莫名其妙多出一条幽灵/S 战机"），
+             换舰 cue 也会立刻去动玩家的船；
+           * 主机读档 ⇒ 同理，PeerScene 也带着旧值。
+         复位后：Ready 必须由**本轮**握手重新点亮（客机 = 主机时钟包；主机 = 客机
+         CLIENT_READY），并且没有对端时最多等 30 s 就走单人兜底
+         ⇒ 既不会带着旧状态布景，也不会永远卡在等待里 ✓
+         ⚠️ 这里**不碰** $X4MPLevelActive / 三波 / 船只等"世界内容"标记：读档时场景
+            已经存在，动了它们会让 Setup 重造一遍整个场景。 -->
+    <cue name="X4MP_Level_PeerStateReset" module="x4mp_level_boron" instantiate="true">
+      <conditions>
+        <event_game_started />
+      </conditions>
+      <actions>
+        <set_value name="global.$X4MPLevelPeerSeen"  exact="0" />
+        <set_value name="global.$X4MPLevelClockOk"   exact="0" />
+        <set_value name="global.$X4MPLevelReady"     exact="0" />
+        <set_value name="global.$X4MPLevelReadyAt"   exact="0" />
+        <set_value name="global.$X4MPLevelPeerScene" exact="0" />
+        <set_value name="global.$X4MPLevelSolo"      exact="0" />
+        <set_value name="global.$X4MPLevelPeerDown"  exact="0" />
+        <set_value name="global.$X4MPLevelClockAge"  exact="0" />
+        <set_value name="global.$X4MPPeerHeroMacro"  exact="''" />
+        <!-- ★2026-09-28（run #26c，用户要求）：载入时**静默清扫**上一次留下的幽灵副本。
+             读档时 global.$X4MPGhostShip 可能指向一条已销毁/船体不对的幽灵（旧存档会把
+             对象引用一起存下来）—— 它会在世界里漂着、甚至被撞爆（用户看到的"一开始主机这边
+             先爆炸了一艘幽灵船"）。这里先不爆炸地清掉它；随后 0.15 的幽灵 cue 会在对端 macro
+             明确后重建出**正确**的那一艘 ✓（两件事互不影响：清扫只针对旧引用） -->
+        <do_if value="global.$X4MPGhostShip?">
+          <do_if value="global.$X4MPGhostShip.exists">
+            <destroy_object object="global.$X4MPGhostShip" explosion="false" />
+            <debug_text text="'X4MP LEVEL: 已静默清扫上一次残留的幽灵副本（随后会按对端 macro 重建）'" chance="100" />
+          </do_if>
+        </do_if>
+        <debug_text text="'X4MP LEVEL: 对端状态已复位（每次载入/读档都清）'" chance="100" />
+      </actions>
+    </cue>
+
+    <!-- 0.2b 单人兜底（★2026-09-28 run #26 起**两端通用**）：30 秒内收不到任何对端信号 ⇒
+         补 PeerSeen，交给 0.2c Latch 放行，避免永远卡在等待里 ✓
+         为什么两端通用：`$X4MPLevelPeerSeen` 的语义就是"听到了对端"——
+           主机 ← 客机的 CLIENT_READY（DLL 的 spawn 信号）；
+           客机 ← 主机的时钟包（唯一由主机发出的 lane）。
+         没有对端时两端都收不到，所以同一条兜底对两端都对 ✓
+         ★run #26 同时补 ClockOk：客机没有主机时钟包时 ClockOk 永远不成立 ⇒ Ready 永远 0 ⇒
+           不换舰、不建幽灵、布景闸门不成立，看着就像"卡住"。补上之后客机会以**单人**方式
+           把关卡跑起来（Solo=1 会让幽灵 cue 直接跳过，不会造查无此人的幽灵）✓
+         注：这里**不再**直接置 Ready —— 主机侧 ClockOk 在 +6 s 自置（见 HostShip），
+         客机侧由本行补；两种情况 Latch 都会在 1 s 内放行 ✓
+         120 s → 30 s：120 s 太长（单人/读档测试要干等两分钟才有世界），而正常的双人握手
+         在 30 s 内一定会完成（关卡自己的时间闸门才 20 s）⇒ 缩短不会误伤握手 ✓ -->
+    <cue name="X4MP_Level_PeerReadyTimeout" module="x4mp_level_boron" instantiate="true">
+      <conditions>
+        <event_game_started />
+      </conditions>
+      <delay exact="30s" />
+      <actions>
+        <do_if value="not global.$X4MPLevelPeerSeen? or global.$X4MPLevelPeerSeen lt 1">
+          <set_value name="global.$X4MPLevelClockOk"   exact="1" />
+          <set_value name="global.$X4MPLevelPeerSeen"  exact="1" />
+          <set_value name="global.$X4MPLevelSolo"      exact="1" />
+          <debug_text text="'X4MP LEVEL: 30 s 收不到对端信号 ⇒ 以单人模式继续（补 ClockOk+PeerSeen，跳过幽灵）'" chance="100" />
+        </do_if>
+      </actions>
+    </cue>
+
+    <!-- ===== 0.16 ★对端座舰 macro（2026-09-27 · run #23 · 用户实测）=================
+         DLL 每秒广播一条 `x4mp_peer_hero`，内容是**对端玩家自己那艘船**的 macro 名
+         （x4mp_native.cpp 的 HeroMacroPacket / flush_peer_macro）。
+         为什么要这条 lane：幽灵副本必须"看起来就是对方那艘船"，而**本端 MD 不可能知道
+         对端开的是什么**（主机开 gamestart 出生舰、客机中途被换成 Argon 巨兽）。
+         旧代码用固定字面量 `macro.ship_arg_s_fighter_01_a_macro` ⇒ 两个症状一次出现：
+           * 客机世界：那正是很久以前删掉的 `X4MP Target` 靶机的模样
+             （用户原话"客户端又创建了我们很久很久之前就废弃的靶机幽灵船"）；
+           * 主机世界：那条幽灵代表**客机玩家**，S 战机在关卡前线撑不过 ~9 s 就被打爆
+             （主机日志 ghostUid=0、截图 "X4MP Ghost (QQQ-977) 被摧毁"）⇒ 主机看不到客机。
+         写法照搬 10.8l 的纪律：**一个纯字符串**当触发器的第 3 个参数（字符串放进
+         AddUITriggeredEvent 的表里会被 UI→MD 编组吃掉，见 x4mp_testworld.xml 的长注释），
+         所以 bridge 用 AddUITriggeredEvent('X4MP_PeerHeroSync','macro', macro)，
+         这里用 event.param3 直接读（与 X4MP_RemoteMacro 同一写法 ✓）。
+         模块加载竞态：这条行每秒重发 ⇒ 漏掉第一条只丢 1 秒，不会丢整局（与主机时钟 lane 同理）✓
+         ========================================================================== -->
+    <cue name="X4MP_Level_PeerHeroMacro" module="x4mp_level_boron" instantiate="true">
+      <conditions>
+        <event_ui_triggered screen="'X4MP_PeerHeroSync'" control="'macro'" />
+      </conditions>
+      <actions>
+        <set_value name="global.$X4MPPeerHeroMacro" exact="event.param3" />
+        <debug_text text="'X4MP LEVEL: 对端座舰 macro = ' + global.$X4MPPeerHeroMacro" chance="100" />
+      </actions>
+    </cue>
+
+    <!-- ===== 0.15 ★幽灵副本（名字必须精确等于 `X4MP Ghost`）=========================
+         DLL 的位姿 lane 只移动**这个名字**的对象（x4mp_native.cpp:1163 find_ship_named ✓；
+         本轮已把阵营扫描扩到全族 ⇒ Boron 等归属也找得到）。
+         规格（用户 2026-09-27）：
+           * 主机侧：代表**客机玩家** ⇒ 客机连上后才创建；连不上 ⇒ 主机看不到幽灵 ✓
+           * 客机侧：代表**主机玩家** ⇒ 就绪后创建，之后由 DLL 按主机位姿驱动 ✓
+           * 初始位置 = 本端座舰 + 500 m（用户要求"客机离主机约 500 m"）✓
+          ★2026-09-27 新增：位姿驱动的真正归属（12:32 那局「幽灵没建出来 / 没同步」根因之一）
+            DLL 每帧 raise_lua(x4mp_move) → ui\x4mp_bridge.lua → AddUITriggeredEvent(X4MP_GhostSync/move)
+            → md\x4mp_testworld.xml 的 X4MP_NetworkSync（无 module 属性 ⇒ 每个世界都跑）
+            → <warp object="global.$X4MPGhostShip" sector="player.sector">
+            ⇒ 整条通路只认 `global.$X4MPGhostShip` 这一个槽：关卡创建幽灵时必须**同时**
+              写进它，否则本关卡的幽灵一动不动（详见下面 actions 的长注释 + 文档 §十四）※
+         ⚠️ 不给 pilot：没驾驶员的船不会自己飞 ⇒ 位姿完全由 DLL 写入 = 冻结镜像 ✓
+         ========================================================================== -->
+    <cue name="X4MP_Level_Ghost" module="x4mp_level_boron" instantiate="true" checkinterval="2s">
+      <conditions>
+        <check_all>
+          <check_value value="global.$X4MPLevelReady? and global.$X4MPLevelReady ge 1" />
+          <!-- ★2026-09-28（run #26）：Solo=1（30 s 兜底：本轮根本没听到任何对端信号）⇒ 不建幽灵。
+               幽灵的语义是"对端玩家的镜像"，没有对端时建出来只会是一条来源不明的船
+               （用户报过的"x4mp_blank / 读档世界里冒出一条 S 战机幽灵"就是它：读档带回来的
+               Ready + 旧 PeerHeroMacro）✓
+               ⚠️ 已知取舍：兜底窗口是开局 30 s —— 客机若比主机早开 30 s 以上，本轮不会再有幽灵
+                   （需要重开一次关卡，或让主机先开）。正常流程（主机先开、客机后进）不受影响。 -->
+          <check_value value="not global.$X4MPLevelSolo? or global.$X4MPLevelSolo lt 1" />
+        </check_all>
+      </conditions>
+      <actions>
+        <!-- ★2026-09-27：先判活。读档时 $X4MPLevelGhost 可能仍指向一艘**已销毁**的船
+             （该全局只在 Init 里被清 0，而 Init 在读档时被 TradeStn 守卫跳过）⇒
+             不做判活的话下面的 do_if 永远不成立 = 再也不会建幽灵（症状：主机世界里
+             既看不到幽灵、也没有同步）。用局部标记把"该建"的两种情况并到一处创建。 -->
+        <!-- ★2026-09-27（run #23）：本轮的"幽灵船体"选法 —— 取**对端真实座舰**的 macro，
+             并只在 macro 不一致时才重建。优先级：
+               ① global.$X4MPPeerHeroMacro —— 0.16 cue 从 DLL 的 x4mp_peer_hero 收到
+                  （对端每秒重发）⇒ 精确镜像，对端中途换舰也会跟上；
+               ② 本关卡设计值兜底：主机侧 = 客机座舰 Argon 巨兽改进型
+                  （ship_ter_l_destroyer_01_a_macro（席恩 Syn），与换舰 cue 同一个宏）；
+                  客机侧 = 主机 gamestart 的 Boron 巨鳐
+                  （ship_bor_l_destroyer_01_a_macro，技术文档6 §一 实证）。
+             ① 20 秒还不到（对端 DLL 是旧版）⇒ 直接用 ②，不让玩家干等。
+             ⚠️ 幽灵名字必须精确等于 `X4MP Ghost`：DLL 的位姿 lane / 血量镜像 / DIAG
+                都按这个名字找对象（invariant）。 -->
+        <set_value name="$ghostWant" exact="'ship_bor_l_destroyer_01_a_macro'" />
+        <do_if value="not global.$X4MPLevelIsClient? or global.$X4MPLevelIsClient lt 1">
+          <set_value name="$ghostWant" exact="'ship_ter_l_destroyer_01_a_macro'" />
+        </do_if>
+        <!-- ★2026-09-27（run #25）：把"本侧默认船体"单独留一份，作为创建失败时的兜底
+             （见下面的 macro 阶梯）。 -->
+        <set_value name="$ghostFallback" exact="$ghostWant" />
+        <!-- ★run #25：再取一份"另一侧默认船体"，作为阶梯的**第二档**。为什么它有价值：
+             客机的默认是 Boron 巨鳐、主机的默认是 Argon 巨兽；而本关卡的
+             `X4MP_Level_ClientShipSwap` 会**给客机现造一艘 Argon 巨兽**再让他换乘
+             （`macro.ship_ter_l_destroyer_01_a_macro`）⇒ 这一档就是"本局刚刚被引擎成功
+             生成过"的 macro。若第一档因任何原因建不出来，这一档几乎不可能同样失败。 -->
+        <set_value name="$ghostOther" exact="'ship_bor_l_destroyer_01_a_macro'" />
+        <do_if value="not global.$X4MPLevelIsClient? or global.$X4MPLevelIsClient lt 1">
+          <set_value name="$ghostOther" exact="'ship_ter_l_destroyer_01_a_macro'" />
+        </do_if>
+        <!-- ★2026-09-27（run #23）：① 收到了没有？"没收到" = undefined **或** 空串。
+             只用 `==` 与 `?` 判（`!=` 是上一轮才在本文件里第一次出现，能不依赖就不依赖）。 -->
+        <set_value name="$ghostHasPeerMacro" exact="true" />
+        <do_if value="not global.$X4MPPeerHeroMacro?">
+          <set_value name="$ghostHasPeerMacro" exact="false" />
+        </do_if>
+        <do_if value="global.$X4MPPeerHeroMacro?">
+          <do_if value="global.$X4MPPeerHeroMacro == ''">
+            <set_value name="$ghostHasPeerMacro" exact="false" />
+          </do_if>
+        </do_if>
+        <do_if value="$ghostHasPeerMacro">
+          <set_value name="$ghostWant" exact="global.$X4MPPeerHeroMacro" />
+        </do_if>
+        <!-- ★2026-09-27（run #25 · 用户实测 "客户端代表主机的那个幽灵飞船并没有按照主机
+             玩家的飞行而飞行"）：**连续失败计数 + 兜底 macro 阶梯**。
+             实测数据（§二十一）：客机那一整局日志里 ghostUid 恒为 0，而同一台机器上"带着
+             对端座舰 macro 的船"也扫不到 ⇒ 客机世界的幽灵副本**根本没建出来**（create_ship
+             失败是静默的，MD 不会把错误写进扩展日志）。位姿 lane 只认
+             `global.$X4MPGhostShip`，没有对象 ⇒ 玩家看到的就是"一条不跟着飞的幽灵"。
+             所以这里让失败可见、可自愈：
+               尝试 0-2 次 ⇒ 对端 macro（最精确，主机=客机的座舰外观）
+               尝试 ≥ 3 次 ⇒ 本侧默认船体（$ghostFallback）
+               尝试 ≥ 5 次 ⇒ 另一侧默认船体（$ghostOther —— 客机换成 Argon 巨兽时，引擎
+                             刚刚用这个 macro 成功生成过一艘，是本局"已知可建"的第二选择）
+               尝试 ≥ 8 次 ⇒ 最保守的 S 战机（任何版本都存在；宁可长得不像，也不能没有）
+             计数在**每轮末尾**更新：幽灵在 ⇒ 归零；不在 ⇒ +1。
+             ⚠️ 阶梯只在"幽灵不存在"时生效；幽灵活着且计数为 0 时才按 macro 不一致重建
+                （否则阶梯的兜底船体会被每 2 s 拆一次、永远修不好）。 -->
+        <set_value name="$ghostTries" exact="0" />
+        <do_if value="global.$X4MPLevelGhostTries?">
+          <set_value name="$ghostTries" exact="global.$X4MPLevelGhostTries" />
+        </do_if>
+        <set_value name="$ghostUse" exact="$ghostWant" />
+        <do_if value="$ghostTries ge 3">
+          <set_value name="$ghostUse" exact="$ghostFallback" />
+        </do_if>
+        <do_if value="$ghostTries ge 5">
+          <set_value name="$ghostUse" exact="$ghostOther" />
+        </do_if>
+        <do_if value="$ghostTries ge 8">
+          <set_value name="$ghostUse" exact="'ship_arg_s_fighter_01_a_macro'" />
+        </do_if>
+        <set_value name="$ghostWait" exact="false" />
+        <do_if value="not $ghostHasPeerMacro">
+          <do_if value="global.$X4MPLevelReadyAt?">
+            <do_if value="global.$X4MPLevelReadyAt ge 1 and player.age - global.$X4MPLevelReadyAt lt 20">
+              <set_value name="$ghostWait" exact="true" />
+            </do_if>
+          </do_if>
+        </do_if>
+
+        <!-- ★2026-09-27（run #23）：判活 + **判 macro**。macro 与 $ghostWant 不一致
+             （旧存档里还是那艘废弃的 S 战机靶机、或对端换了船）⇒ 也算"该重建"，
+             下面会**静默**销毁旧幽灵、再按新 macro 建一艘（不爆炸、不打扰玩家）。 -->
+        <set_value name="$needGhost" exact="true" />
+        <set_value name="$ghostAlive" exact="false" />
+        <do_if value="global.$X4MPLevelGhost?">
+          <do_if value="global.$X4MPLevelGhost.exists">
+            <set_value name="$ghostAlive" exact="true" />
+          </do_if>
+        </do_if>
+        <do_if value="$ghostAlive">
+          <!-- ★2026-09-27（run #25）：重建判定改成**比"期望"**，不再比"实际建成的 macro"。
+               为什么：下面的阶梯为了保命会把幽灵降级成"本侧默认船体 / 另一侧默认船体 / S 战机"，
+               若拿"实际 macro"和"期望 macro"比 ⇒ 每 2 s 就把那条降级船拆一次，永远修不好。
+               所以创建时额外记一条 `global.$X4MPLevelGhostWant` = 当时的**期望**：
+                 · 期望没变（哪怕当时是降级建的）⇒ 不重建；
+                 · 对端换了座舰（$ghostWant 变）⇒ 重建；
+                 · 旧存档里没有这条记录（undefined）⇒ 重建一次（自愈，§十九 的老行为）。 -->
+          <do_if value="global.$X4MPLevelGhostWant?">
+            <do_if value="global.$X4MPLevelGhostWant == $ghostWant">
+              <set_value name="$needGhost" exact="false" />
+            </do_if>
+          </do_if>
+        </do_if>
+        <do_if value="$ghostWait">
+          <set_value name="$needGhost" exact="false" />
+        </do_if>
+        <do_if value="$needGhost">
+          <!-- 旧幽灵（macro 不匹配 / 已销毁）⇒ 先静默清掉：explosion="false" ⇒ 不爆、不刷事件
+               （它只是本端的镜像，炸一下会误导玩家"对方的船炸了"）。 -->
+          <do_if value="$ghostAlive">
+            <destroy_object object="global.$X4MPLevelGhost" explosion="false" />
+          </do_if>
+          <!-- ★ 运行时 macro 名 → macro 值：`@macro.{名字}` 是本项目的既有写法
+               （md\x4mp_testworld.xml 的 X4MP_SpawnRemote 逐字同款，10.8l 实证可跑） -->
+          <set_value name="$ghostMacro" exact="@macro.{$ghostUse}" />
+          <!-- ★2026-09-28（run #26b，用户实测反馈修正）：生成点从"座舰 +500 m"改成
+               "座舰 +2500 m、再抬 400 m"。
+               为什么：两端**共用同一个出生锚点**（关卡 gamestart 与 $X4MPLevelAnchor* 是同一处），
+               所以客机还没换舰/换舰失败时，它上报的位姿 ≈ 主机自己座舰的位置 ⇒ 新造的幽灵会被
+               位姿 lane 立刻写到**主机自己身上** ⇒ 撞爆（用户截图：残骸紧贴主机出生点，
+               两个世界并排看"巨兽"就在"巨鳐"旁边）。
+               拉开 2.5 km 且抬高 400 m 后：幽灵出生时与任何 L 舰的碰撞体都不相交，
+               下一帧位姿 lane 再把它带到对端真实位置（贴合由 DLL 负责，不依赖这个初值）✓
+               ⚠️ 注意 safepos 只决定**出生点**；真正的跟随完全由 DLL 写位姿决定。 -->
+          <create_ship name="$ghost" macro="$ghostMacro" sector="player.sector">
+            <owner exact="faction.player" overridenpc="true" />
+            <safepos object="player.ship" x="0" y="400" z="2500" allowyaxis="true" />
+          </create_ship>
+          <!-- ★★★ 2026-09-27（run #25 · 本轮症状的真凶候选）：**先写位姿槽 + macro，最后才改名**。
+               位姿 lane 只认 `global.$X4MPGhostShip`（§十四），而 MD 的一轮动作里任何算子抛错，
+               **同轮后面的动作全部被跳过**。原来的顺序是
+                   改名 set_object_name → 记录 → 写位姿槽
+               ⇒ 改名一旦在本端失败（目标名一时被占用等），位姿槽就**永远**写不进去：幽灵对象
+                 存在、位置却一个字节都不会动 —— 玩家看到的就是用户原话
+                 "客户端代表主机的那个幽灵飞船并没有按照主机玩家的飞行而飞行"。
+               现在的顺序：创建 → （LevelGhost + GhostShip + GhostMacro）→ 改名/已知。
+               改名失败只影响 DLL 按名字找它（血量镜像 + DIAG 会瞎 —— 客机日志里 ghostUid=0 的
+               另一种成因），**不影响飞行**。
+               `$ghost? and $ghost.exists` 守卫：create_ship 失败时 $ghost 还可能指着上一轮那个
+               已销毁的对象，未加守卫地写 global 会抛错，并连带跳过本轮末尾的失败计数（阶梯就
+               永远不动了）。 -->
+          <do_if value="$ghost?">
+            <do_if value="$ghost.exists">
+              <set_value name="global.$X4MPLevelGhost" exact="$ghost" />
+              <set_value name="global.$X4MPGhostShip"   exact="global.$X4MPLevelGhost" />
+              <set_value name="global.$X4MPLevelGhostMacro" exact="$ghostUse" />
+              <!-- ★run #25：记下**这一次的期望**（可能和实际建成的 $ghostUse 不同，见阶梯）。
+                   它只用来回答"要不要重建"：期望变了才重建，降级船体因此不会被每 2 s 拆一次。 -->
+              <set_value name="global.$X4MPLevelGhostWant" exact="$ghostWant" />
+              <set_object_name object="$ghost" name="'X4MP Ghost'" />
+              <set_known object="$ghost" known="true" />
+            </do_if>
+          </do_if>
+          <!-- ★run #25：写 global.$X4MPLevelGhost 已上移到"创建之后立刻写"（见上面的长注释）。
+               原来这里还有一条**未加守卫**的重复写：create_ship 失败时 $ghost 可能仍指向上一轮
+               那个已销毁对象，写进 global 会抛错并跳过本轮末尾的失败计数 ⇒ 阶梯永远不动。 -->
+          <!-- ★2026-09-27（run #23）：记下"这艘幽灵是用哪个 macro 建的"。
+               下次复检拿它和 $ghostWant 比：不一样（对端换舰 / 旧存档里的 S 战机）
+               ⇒ 重建。undefined 也算不匹配 ⇒ 旧存档第一次复检就会自愈 ✓ -->
+          <!-- ★run #25：写 global.$X4MPLevelGhostMacro 也已上移（值改用 $ghostUse，即阶梯真正
+               使用过的那个 macro）。留在这里的旧写法写的是 $ghostWant，会把阶梯的兜底结果覆盖掉
+               ⇒ 每 2 s 拆一次幽灵。 -->
+          <!-- ★★★ 2026-09-27 实锤"幽灵不动/幽灵没同步"的根因记录 ★★★
+               DLL 的位姿 lane 是：每帧 raise_lua("x4mp_move", "x,y,z,yaw,pitch,roll")
+                 → ui\\x4mp_bridge.lua on_move
+                 → AddUITriggeredEvent('X4MP_GhostSync','move',{6 个数})
+                 → md\\x4mp_testworld.xml 的 X4MP_NetworkSync（**该 cue 没有 module 属性
+                   ⇒ 每个世界都会跑**，invariant I3）
+                 → <warp object="global.$X4MPGhostShip" sector="player.sector">
+              也就是说：整条位姿通路只认 `global.$X4MPGhostShip` **一个槽**。
+              关卡原来只把幽灵写进 `$X4MPLevelGhost` ⇒ warp 的守卫
+              `do_if value="global.$X4MPGhostShip?"` 不成立 ⇒ **本关卡的幽灵一个字节都不会动**
+              （实测：两端幽灵都停在"本端座舰 + 500 m"，日志里连 T1 park 都没触发）。
+              所以这里把同一个对象**同时**写进那个通用槽，于是白拿两条已验证的通路：
+                · 位置同步  = X4MP_NetworkSync（每帧 x,y,z；rotation 目前该 cue 不取）
+                · V2 血量回写 = md\\x4mp_stations.xml 的 X4MP_StationGhostVitals
+                  （镜像站打幽灵时用主机的权威血量覆盖，避免双重伤害）
+              ⚠️ 该槽是全局通用槽：x4mp_blank 那套 gamestart 也会写它，而两种世界不会
+                 同时存在 ⇒ 不冲突。 -->
+          <!-- ★run #25：写 global.$X4MPGhostShip 也已上移（值改为 global.$X4MPLevelGhost，语义相同）。
+               旧写法在这里是**未加守卫**的第二条写槽：create_ship 失败时会抛错 ⇒ 本轮末尾的
+               失败计数被跳过、阶梯不推进。 -->
+          <debug_text text="'X4MP LEVEL: 幽灵副本 X4MP Ghost 已创建（本端座舰 +500 m，等 DLL 写位姿），macro = ' + $ghostWant" chance="100" />
+        </do_if>
+        <!-- ★2026-09-27：**每一轮复检都重申这个槽**（不只创建那一次）。
+             为什么必需：读档时幽灵对象已存在（上面 $needGhost = false）⇒ 创建段不跑 ⇒
+             旧存档里的幽灵永远挂不上位姿 lane（实测症状：主机世界里幽灵一动不动、
+             看起来"没建出来"）。重申是幂等的、每 2 s 一次，代价可忽略。 -->
+        <do_if value="global.$X4MPLevelGhost? and global.$X4MPLevelGhost.exists">
+          <set_value name="global.$X4MPGhostShip" exact="global.$X4MPLevelGhost" />
+          <!-- ★2026-09-27（run #25）：名字也**每轮重申**（幂等，2 s 一次）。作用：万一某一轮
+               set_object_name 失败过，下一轮就自愈 —— DLL 靠这个名字找幽灵（血量镜像 + DIAG），
+               而位姿 lane 靠上面那个槽：两者从此互不拖累。这一条排在写槽**之后**，所以它即使
+               抛错也已经不影响飞行（这正是本轮客机症状的关键顺序）。 -->
+          <set_object_name object="global.$X4MPLevelGhost" name="'X4MP Ghost'" />
+        </do_if>
+        <!-- ★2026-09-27（run #25）：连续失败计数（配合上面的 macro 阶梯）。
+             幽灵在 ⇒ 归零；幽灵不在（create_ship 静默失败 / 被销毁后没能重建）⇒ +1。
+             放在**本轮最后**：前面任何一步抛错都不会漏掉计数，阶梯因此总能推进。 -->
+        <set_value name="global.$X4MPLevelGhostTries" exact="$ghostTries + 1" />
+        <do_if value="global.$X4MPLevelGhost? and global.$X4MPLevelGhost.exists">
+          <set_value name="global.$X4MPLevelGhostTries" exact="0" />
+        </do_if>
+        <!-- ★run #25：`$ghostWait`（对端 macro 还没到、开局 20 s 宽限）期间**不算失败**。
+             否则开局那 10 个空转周期会把计数顶到 ≥ 8，一上来就将就成 S 战机。 -->
+        <do_if value="$ghostWait">
+          <set_value name="global.$X4MPLevelGhostTries" exact="0" />
+        </do_if>
+      </actions>
+    </cue>
+
+    <!-- 0.1 任务宿主 cue：create_mission 关联到它；其它 cue 用 cue="X4MP_Level_Mission" 更新目标 -->
+    <cue name="X4MP_Level_Mission" module="x4mp_level_boron" instantiate="true">
+      <conditions>
+        <event_game_started />
+      </conditions>
+    </cue>
+
+    <!-- 1) 布景（开局 20 秒后）：保护目标 + Xenon 站 + 我方 20 艘 + 玩家巨鳐 -->
+    <cue name="X4MP_Level_Setup" module="x4mp_level_boron" instantiate="true" checkinterval="2s">
+      <conditions>
+        <check_all>
+          <!-- ★2026-09-26 修正：**不要**在这里放 <event_game_started /> ——
+               事件型条件只触发一次，而那一刻时钟闸门（ClockOk/host time）还没就绪
+               ⇒ 检查不通过就再也不会复检 ⇒ 场景永远建不出来（实测：0.0,0.0,-300 空场）。
+               纯 check_value + checkinterval="2s" 才是"周期复检直到成立"的正确写法。
+               player.age + global.$X4MPHostTimeOffset = 主机侧游戏时间（P0-2 时钟）。 -->
+          <check_value value="global.$X4MPLevelReady? and global.$X4MPLevelReady ge 1 and global.$X4MPLevelClockOk? and global.$X4MPLevelClockOk ge 1 and (player.age + global.$X4MPHostTimeOffset) ge 20s and ((global.$X4MPLevelIsClient? and global.$X4MPLevelIsClient ge 1) or (global.$X4MPLevelPeerScene? and global.$X4MPLevelPeerScene ge 1))" />
+        </check_all>
+      </conditions>
+      <actions>
+        <do_if value="global.$X4MPLevelActive lt 1">
+
+          <!-- 1.1 保护目标：Boron 贸易空间站 -->
+          <create_station name="$trade" macro="macro.station_bor_tradestation_base_01_macro"
+                          constructionplan="'bor_tradestation'"
+                          owner="faction.boron" sector="player.sector"
+                          state="componentstate.operational">
+            <position x="global.$X4MPLevelAnchorX" y="global.$X4MPLevelAnchorY"
+                      z="global.$X4MPLevelAnchorZ + 8000" />
+          </create_station>
+          <!-- ★2026-09-27：名字前缀改成 `X4MP STN <n>` ⇒ 站的血量/护盾/摧毁三条 lane
+               自动接管（DLL parse_station_tag 读名字里的序号，尾随文字随便写；
+               vitals cue 是 instantiate="true" 且**无 module 属性** ⇒ 任何世界都跑）。
+               主机权威、客机镜像（客机本地伤害走 station_module_damage 上行）。 -->
+          <set_object_name object="$trade" name="'X4MP STN 1 Boron Trade'" />
+          <set_known object="$trade" known="true" />
+          <set_value name="global.$X4MPLevelTradeStn" exact="$trade" />
+          <debug_text text="'X4MP LEVEL: Boron trade station spawned'" chance="100" />
+
+          <!-- 1.2 Xenon 防御空间站（用户指定：防御站类型）
+               ★ 炮塔的真正来源：create_station + constructionplan 只给"模块树"，**不给装备**
+                 （我们自己 run #20-B 实测：18 个 defencemodule、0 座炮塔；原版存档里每个
+                  xenon_small_station_01_base_macro 带 20 炮塔 + 11 护盾）⇒ 必须走原版
+                 官方路径把它填满（md\finalisestations.xml:998-1025），
+                 再加 finalisestations.xml:141-147 的 finalisation 两行（否则"有炮塔但不射击"）。
+                 写法 = md\x4mp_stations.xml:275-341 里已实证的那一套。 -->
+          <create_station name="$xstn" macro="macro.station_xen_defence_base_01_macro"
+                          constructionplan="'xen_defence'"
+                          owner="faction.xenon" sector="player.sector"
+                          state="componentstate.operational">
+            <position x="global.$X4MPLevelAnchorX" y="global.$X4MPLevelAnchorY"
+                      z="global.$X4MPLevelAnchorZ - 80000" />
+          </create_station>
+          <!-- 1.2a 给站"填装备"（炮塔/护盾）：原版官方路径
+               （finalisestations.xml:998-1025 + 141-147；写法同 x4mp_stations.xml:275-341） -->
+          <set_module_loadout_level object="$xstn" exact="1.0f" />
+          <set_value name="$seq" exact="$xstn.plannedconstruction.sequence" />
+          <do_if value="$seq?">
+            <generate_loadout result="$lo" sequence="$seq" faction="$xstn.owner"
+                              level="1.0f" variation="0"
+                              flags="units drones" invertflags="true" />
+            <do_if value="$lo?">
+              <do_all exact="$lo.count" counter="$l">
+                <apply_loadout loadout="$lo.{$l}" sequence="$seq" index="$l" />
+              </do_all>
+            </do_if>
+            <apply_construction_sequence station="$xstn" sequence="$seq" />
+            <!-- finalisation 两行：原版 finalisestations.xml:141-147，缺了会"有炮塔但不射击" -->
+            <set_value name="$bbox" exact="$xstn.size / 2" />
+            <set_build_plot object="$xstn" x="$bbox" y="$bbox" z="$bbox" allowreduction="true" />
+            <signal_objects object="player.galaxy" param="'init station'" param2="$xstn" param3="true" />
+            <debug_text text="'X4MP LEVEL: Xenon 站装备流程已执行（loadout + 成型 + finalisation）'" chance="100" />
+          </do_if>
+          <!-- ★2026-09-27：同上，Xenon 防御站 = `X4MP STN 2`（它是玩家要打掉的目标，
+               接进 lane 后血量由主机裁决、客机镜像 ⇒ 两端"同一座站、同一份血"。） -->
+          <set_object_name object="$xstn" name="'X4MP STN 2 Xenon Station'" />
+          <set_known object="$xstn" known="true" />
+          <append_to_list name="global.$X4MPStationList" exact="$xstn" create="true" />
+          <set_value name="global.$X4MPLevelXenonStn" exact="$xstn" />
+
+          <!-- 1.3 已删除（2026-09-26，用户规则）：场边的"备用巨鳐"不再生成 ——
+               **玩家这边最多两艘 L 驱逐舰**：主机 = Boron 巨鳐，客机 = Argon 巨兽 改进型。 -->
+          <debug_text text="'X4MP LEVEL: 巨鳐已就位（F5/F6 接管）'" chance="100" />
+
+          <!-- 1.4 我方舰队：5 × 九头蛇（Hydra，M 护卫舰） -->
+          <do_all exact="5" counter="$i">
+            <set_value name="$px" exact="(-2400 + $i * 1200)" />
+            <create_ship name="$hydra" macro="macro.ship_bor_m_corvette_01_a_macro" sector="player.sector">
+              <owner exact="faction.boron" overridenpc="true" />
+            <pilot macro="character_boron_generic_01_macro" />
+                <position x="global.$X4MPLevelAnchorX + $px" y="global.$X4MPLevelAnchorY"
+                      z="global.$X4MPLevelAnchorZ + 17000" />
+            </create_ship>
+            <!-- ★[BOTH] 同步命名 + 登记（详见 Init 的 NpcNext 注释）：lid = 列表长度 + 1
+                 ⇒ 名字里的数字恒等于 global.$X4MPNpcList 的下标（三条 lane 的寻址前提） -->
+            <do_if value="global.$X4MPNpcList?">
+              <set_value name="$npcLid" exact="global.$X4MPNpcList.count + 1" />
+            </do_if>
+            <do_else>
+              <set_value name="$npcLid" exact="1" />
+            </do_else>
+            <set_object_name object="$hydra" name="'X4MP NPC ' + $npcLid + ' [BOTH]'" />
+            <append_to_list name="global.$X4MPNpcList" exact="$hydra" create="true" />
+            <!-- 满配：MD 生成的船默认没有装备（没引擎/没武器）⇒ 必须显式 faction= -->
+          <generate_loadout macro="$hydra.macro" level="1" faction="faction.boron"
+                            result="$hydraLo" flags="units drones" invertflags="true" />
+          <do_if value="$hydraLo?">
+            <apply_loadout object="$hydra" loadout="$hydraLo.{1}" />
+          </do_if>
+          <set_known object="$hydra" known="true" />
+            <!-- ★2026-09-27：**客机不给订单**。客机的副本由 DLL 冻结（order_wait）+ 按主机快照
+                 写回；MD 再给它 Attack 订单，它就会自己飞（实测：err 涨到 25 km、世界与主机
+                 分叉 —— 用户看到的"客户端按自己的方式模拟"）。主机下单、客机镜像 ✓ -->
+            <do_if value="not global.$X4MPLevelIsClient? or global.$X4MPLevelIsClient lt 1">
+              <create_order id="'Attack'" object="$hydra" immediate="true" override="true">
+                <param name="primarytarget" value="global.$X4MPLevelXenonStn" />
+                <param name="pursuetargets" value="true" />
+                <param name="allowothertargets" value="true" />
+              </create_order>
+            </do_if>
+          </do_all>
+
+          <!-- 1.5 我方舰队：15 × Boron S 战机 -->
+          <do_all exact="15" counter="$i">
+            <set_value name="$px2" exact="(-5600 + $i * 800)" />
+            <create_ship name="$bS" macro="macro.ship_bor_s_fighter_01_a_macro" sector="player.sector">
+              <owner exact="faction.boron" overridenpc="true" />
+            <pilot macro="character_boron_generic_01_macro" />
+                <position x="global.$X4MPLevelAnchorX + $px2" y="global.$X4MPLevelAnchorY + 400"
+                      z="global.$X4MPLevelAnchorZ + 18500" />
+            </create_ship>
+            <!-- ★[BOTH] 同步命名 + 登记（同 1.4 的写法） -->
+            <do_if value="global.$X4MPNpcList?">
+              <set_value name="$npcLid" exact="global.$X4MPNpcList.count + 1" />
+            </do_if>
+            <do_else>
+              <set_value name="$npcLid" exact="1" />
+            </do_else>
+            <set_object_name object="$bS" name="'X4MP NPC ' + $npcLid + ' [BOTH]'" />
+            <append_to_list name="global.$X4MPNpcList" exact="$bS" create="true" />
+            <!-- 满配（Boron 件；显式 faction= 见主机 cue 注释） -->
+          <generate_loadout macro="$bS.macro" level="1" faction="faction.boron"
+                            result="$bSLo" flags="units drones" invertflags="true" />
+          <do_if value="$bSLo?">
+            <apply_loadout object="$bS" loadout="$bSLo.{1}" />
+          </do_if>
+          <set_known object="$bS" known="true" />
+            <!-- ★客机不下单（同 1.4 的说明） -->
+            <do_if value="not global.$X4MPLevelIsClient? or global.$X4MPLevelIsClient lt 1">
+              <create_order id="'Attack'" object="$bS" immediate="true" override="true">
+                <param name="primarytarget" value="global.$X4MPLevelXenonStn" />
+                <param name="pursuetargets" value="true" />
+                <param name="allowothertargets" value="true" />
+              </create_order>
+            </do_if>
+          </do_all>
+
+          <!-- 1.6a 近场混编敌队（用户要求）：开局就在附近生成 5 × S + 5 × M，立刻有交火 -->
+          <do_all exact="5" counter="$i">
+            <set_value name="$nx" exact="(-4000 + $i * 800)" />
+            <create_ship name="$nS" macro="macro.ship_xen_s_fighter_01_a_macro" sector="player.sector">
+              <owner exact="faction.xenon" overridenpc="true" />
+            <pilot macro="character_xenon_generic_01_macro" />
+              <position x="global.$X4MPLevelAnchorX + $nx" y="global.$X4MPLevelAnchorY"
+                      z="global.$X4MPLevelAnchorZ - 9000" />
+            </create_ship>
+            <!-- ★[BOTH] 同步命名 + 登记（同 1.4 的写法） -->
+            <do_if value="global.$X4MPNpcList?">
+              <set_value name="$npcLid" exact="global.$X4MPNpcList.count + 1" />
+            </do_if>
+            <do_else>
+              <set_value name="$npcLid" exact="1" />
+            </do_else>
+            <set_object_name object="$nS" name="'X4MP NPC ' + $npcLid + ' [BOTH]'" />
+            <append_to_list name="global.$X4MPNpcList" exact="$nS" create="true" />
+            <!-- 满配（Xenon 件）⇒ 否则这批敌机没有武器，打不动贸易站 -->
+          <generate_loadout macro="$nS.macro" level="1" faction="faction.xenon"
+                            result="$nSLo" flags="units drones" invertflags="true" />
+          <do_if value="$nSLo?">
+            <apply_loadout object="$nS" loadout="$nSLo.{1}" />
+          </do_if>
+          <set_known object="$nS" known="true" />
+            <!-- ★客机不下单（同 1.4 的说明） -->
+            <do_if value="not global.$X4MPLevelIsClient? or global.$X4MPLevelIsClient lt 1">
+              <create_order id="'Attack'" object="$nS" immediate="true" override="true">
+                <param name="primarytarget" value="global.$X4MPLevelTradeStn" />
+                <param name="pursuetargets" value="true" />
+                <param name="allowothertargets" value="true" />
+              </create_order>
+            </do_if>
+          </do_all>
+          <do_all exact="5" counter="$i">
+            <set_value name="$nx2" exact="(-3000 + $i * 1200)" />
+            <create_ship name="$nM" macro="macro.ship_xen_m_fighter_01_a_macro" sector="player.sector">
+              <owner exact="faction.xenon" overridenpc="true" />
+            <pilot macro="character_xenon_generic_01_macro" />
+              <position x="global.$X4MPLevelAnchorX + $nx2" y="global.$X4MPLevelAnchorY"
+                      z="global.$X4MPLevelAnchorZ - 11000" />
+            </create_ship>
+            <!-- ★[BOTH] 同步命名 + 登记（同 1.4 的写法） -->
+            <do_if value="global.$X4MPNpcList?">
+              <set_value name="$npcLid" exact="global.$X4MPNpcList.count + 1" />
+            </do_if>
+            <do_else>
+              <set_value name="$npcLid" exact="1" />
+            </do_else>
+            <set_object_name object="$nM" name="'X4MP NPC ' + $npcLid + ' [BOTH]'" />
+            <append_to_list name="global.$X4MPNpcList" exact="$nM" create="true" />
+            <!-- 满配（Xenon 件） -->
+          <generate_loadout macro="$nM.macro" level="1" faction="faction.xenon"
+                            result="$nMLo" flags="units drones" invertflags="true" />
+          <do_if value="$nMLo?">
+            <apply_loadout object="$nM" loadout="$nMLo.{1}" />
+          </do_if>
+          <set_known object="$nM" known="true" />
+            <!-- ★客机不下单（同 1.4 的说明） -->
+            <do_if value="not global.$X4MPLevelIsClient? or global.$X4MPLevelIsClient lt 1">
+              <create_order id="'Attack'" object="$nM" immediate="true" override="true">
+                <param name="primarytarget" value="global.$X4MPLevelTradeStn" />
+                <param name="pursuetargets" value="true" />
+                <param name="allowothertargets" value="true" />
+              </create_order>
+            </do_if>
+          </do_all>
+
+          <!-- 1.6 炮塔底数改为"延迟统计"（见 X4MP_Level_TurretBase 两个 cue）：
+               站的装备 / 成型 / finalisation 需要一点时间，立刻数会是 0。 -->
+
+          <!-- 1.7 任务 UI：阶段 1 = 保护贸易站（objective.protect 会画保护圈） -->
+          <create_mission cue="X4MP_Level_Mission" name="{100002,1}" description="{100002,2}"
+                          faction="faction.player" type="missiontype.plot" abortable="false">
+            <objective step="1" action="objective.protect" text="{100002,10}"
+                      object="global.$X4MPLevelTradeStn" comment="ProtectTradeStation" />
+          </create_mission>
+          <debug_text text="'X4MP LEVEL: mission created'" chance="100" />
+
+          <set_value name="global.$X4MPLevelActive" exact="1" />
+          <debug_text text="'X4MP LEVEL: setup done - 30s 后第一波'" chance="100" />
+        </do_if>
+      </actions>
+    </cue>
+
+    <!-- 1.9 炮塔底数：等装备 + 成型 + finalisation 落定后再数（45 s 一次；90 s 兜底重试） -->
+    <cue name="X4MP_Level_TurretBase" module="x4mp_level_boron" instantiate="true">
+      <conditions>
+        <event_game_started />
+      </conditions>
+      <delay exact="45s" />
+      <actions>
+        <do_if value="global.$X4MPLevelActive ge 1 and global.$X4MPTurretLeft lt 1">
+          <find_object_component name="$turrets" object="global.$X4MPLevelXenonStn"
+                                 class="class.turret" multiple="true" recursive="true" />
+          <do_if value="$turrets?">
+            <set_value name="global.$X4MPTurretLeft" exact="$turrets.count" />
+          </do_if>
+          <debug_text text="'X4MP LEVEL: xenon turrets(45s) = ' + global.$X4MPTurretLeft" chance="100" />
+        </do_if>
+      </actions>
+    </cue>
+
+    <!-- 1.10 兜底：若 45 s 那次还是 0（站比较大 / 引擎忙），90 s 再数一次 -->
+    <cue name="X4MP_Level_TurretBase2" module="x4mp_level_boron" instantiate="true">
+      <conditions>
+        <event_game_started />
+      </conditions>
+      <delay exact="90s" />
+      <actions>
+        <do_if value="global.$X4MPLevelActive ge 1 and global.$X4MPTurretLeft lt 1">
+          <find_object_component name="$turrets2" object="global.$X4MPLevelXenonStn"
+                                 class="class.turret" multiple="true" recursive="true" />
+          <do_if value="$turrets2?">
+            <set_value name="global.$X4MPTurretLeft" exact="$turrets2.count" />
+          </do_if>
+          <debug_text text="'X4MP LEVEL: xenon turrets(90s) = ' + global.$X4MPTurretLeft" chance="100" />
+        </do_if>
+      </actions>
+    </cue>
+
+    <!-- 1.11 ★客机专属：把**客户端玩家的座舰换成 Xenon 船**（用户要求）
+         身份来源：桥接层 X4MP_HostTimeSync / 'clock' 事件 —— DLL 的
+         flush_incoming_time_sync()（x4mp_native.cpp:4375-4396）开头就是
+             if (rows.empty() || g_asHost) return;
+         ⇒ 这个事件**只在客机**触发，收到它即可判定"本端是客机"，DLL 无需改动。
+         换船用原版 MD 原语 <teleport_player>（common.xsd；原生写法 md\scenario_combat.xml:359：
+             <teleport_player object="$AlliedDestroyer" instant="true" force="true"/>）
+         instant=true 瞬移、force=true 免"传送"研究、control=true（默认）玩家接管。
+         想换船体：改这一行 macro 即可（`ship_arg_l_destroyer_02_a` = **Argon 巨兽 Behemoth**，当前选用）。
+         其他候选（Xenon 系，显示名/宏 已核对）：K ship_xen_xl_destroyer_01_a（XL 驱逐舰）、
+         I ship_xen_xl_carrier_01_a（XL 航母）、B ship_xen_m_corvette_01_a（M 护卫舰）、
+         N ship_xen_s_fighter_01_a（S 战机）、H ship_xen_l_terraformer_01_a（L，用户不要）。
+         位置：主机 z = -300、客机 z = +300 ⇒ 相距 600 m，不重叠。 -->
+    <cue name="X4MP_Level_ClientXenonShip" module="x4mp_level_boron" instantiate="true">
+      <conditions>
+        <event_ui_triggered screen="'X4MP_HostTimeSync'" control="'clock'" />
+      </conditions>
+      <actions>
+        <!-- ★2026-09-27：收到主机时钟包 ⇒ ① 本端时钟可用（布景/波次的闸门）；
+             ② **同时置 PeerSeen** —— 这是客机唯一可用的"主机在线"证据
+             （主机侧那条来自 X4MP_NpcSync/spawn，见 0.2a）⇒ 两端由此对称：
+             对方不在场就什么都不建 ✓ -->
+        <set_value name="global.$X4MPLevelClockOk" exact="1" />
+        <!-- ★2026-09-27：时钟包只发客机（DLL flush_incoming_time_sync 开头
+             `if (rows.empty() || g_asHost) return;`，x4mp_native.cpp:4488/4502）
+             ⇒ 这条置位就是"本端是客机"的唯一凭据，换舰 cue 用它当闸门（主机永不换舰） -->
+        <set_value name="global.$X4MPLevelIsClient" exact="1" />
+        <!-- ★2026-09-27 主机在线心跳（客机冻结判据）：每个时钟包都刷新一次本端 player.age -->
+        <set_value name="global.$X4MPLevelClockAge" exact="player.age" />
+        <!-- 主机回来了 ⇒ 解除冻结（X4MP_Level_PeerWatch 会在 6 s 无时钟后置 1） -->
+        <do_if value="global.$X4MPLevelPeerDown? and global.$X4MPLevelPeerDown ge 1">
+          <set_value name="global.$X4MPLevelPeerDown" exact="0" />
+          <debug_text text="'X4MP LEVEL: 主机时钟恢复 ⇒ 解除客机冻结（世界重新跟随主机）'" chance="100" />
+          <show_notification text="{100002,23}" priority="2" timeout="6s" />
+        </do_if>
+        <do_if value="not global.$X4MPLevelPeerSeen? or global.$X4MPLevelPeerSeen lt 1">
+          <set_value name="global.$X4MPLevelPeerSeen" exact="1" />
+          <debug_text text="'X4MP LEVEL: 主机时钟包到（客机 ⇒ 主机在线）'" chance="100" />
+        </do_if>
+      </actions>
+    </cue>
+
+    <!-- 1.11 ★客机换舰（**周期复检**，2026-09-27 修：原来挂在上面的事件 cue 里 ⇒ 实测整局不生效）===
+         根因：事件型条件（event_ui_triggered）**只触发一次** —— 同一个教训已写在 1) Setup
+         cue 的注释里。本局客机（profile 1002）的时间线：
+           04:32:56.4  第一个主机时钟包到（DLL `host clock:` 行，同一行里 local=0.000s
+                       ⇒ 游戏时钟还没起步，世界还在加载）
+           04:33:00.4  `event_game_started` 才送出（x4native.log: Lua bridge game_started）
+         即时钟包**早于本 MD 的初始化 4 秒**到 ⇒ 那一刻 `global.$X4MPLevelClientShipDone?`
+         是 undefined ⇒ 原来的 do_if 不成立 ⇒ **客机整局留在出生舰上**。
+         实测后果（同一局两端 DLL 日志逐位相同）：
+           DIAG own=(-30677.9, 0.0, -122754.3)  two ends identical
+           sectorKeys(own/remote)=980245057/0（主机） / 0/980245057（客机）
+         ⇒ 两艘座舰完全重合 ⇒ 主机那条幽灵被写到与主机座舰同一个点上 ⇒ 肉眼即
+           "客户端对应的幽灵船没有建出来 + 没有同步"（其实是叠在了一起）。
+         修法：① 闸门全部换成对 undefined 安全的幂等判断（`not x? or x lt 1`）
+               ② checkinterval="2s" 周期复检 ⇒ 哪怕第一个时钟包来得很早，后一轮也能补上
+               ③ 与布景共用 Ready 闸门（主机不在场就不换舰，与"客机没连上就不许开始"对称）
+         注：换舰本体（create_ship/loadout/teleport_player）留在下面原样不动 ——
+             已验证过的写法，本 cue 只是给它换了个"会被反复检查"的家。 -->
+    <cue name="X4MP_Level_ClientShipSwap" module="x4mp_level_boron" instantiate="true" checkinterval="2s">
+      <conditions>
+        <check_all>
+          <check_value value="global.$X4MPLevelIsClient? and global.$X4MPLevelIsClient ge 1" />
+          <check_value value="global.$X4MPLevelReady? and global.$X4MPLevelReady ge 1" />
+        </check_all>
+      </conditions>
+      <actions>
+        <do_if value="not global.$X4MPLevelClientShipDone? or global.$X4MPLevelClientShipDone lt 1">
+          <!-- ★2026-09-27 锚点防御性补齐（幂等）：Init 里那段只在**新局**跑（读档时被
+               `not global.$X4MPLevelTradeStn?` 挡住）⇒ 旧存档里这三个全局可能不存在，
+               而下面的 <position> 直接引用它们 ⇒ create_ship 整条动作会失败（换舰静默
+               失败，实测症状就是"客机整局留在出生舰"）。缺了就按 Init 的常量补上。 -->
+          <do_if value="not global.$X4MPLevelAnchorX?">
+            <set_value name="global.$X4MPLevelAnchorX" exact="-30678.0" />
+            <set_value name="global.$X4MPLevelAnchorY" exact="0" />
+            <set_value name="global.$X4MPLevelAnchorZ" exact="-122754.0" />
+          </do_if>
+          <!-- ★2026-09-27 阶段 1：还没有客机座舰就建（只建一次；引用记进 $X4MPLevelClientShip）。
+               旧写法把"建船 + teleport_player"挤在同一个动作批里，实测会出现"人离开了旧船、
+               新船还没接管"的空窗（DLL 报 uid=0 持续 **94 秒**、位置退回锚点 ⇒ 主机那条幽灵
+               只能趴在主机自己身上 ⇒ 用户看到"主机端仍然没有创建关于客户端的玩家船"）。 -->
+          <do_if value="not global.$X4MPLevelClientShip? or not global.$X4MPLevelClientShip.exists">
+          <!-- ★★★ 2026-09-27（run #25c · 用户实测 "客户端那边多建了一艘巨鳐飞船"）：
+               本 cue 原来**只造新舰、从不处理玩家换舰前那艘**。客机的出生舰是 Boron 巨鳐
+               （DLL 日志实证：换舰前 `own hero macro = 'ship_bor_l_destroyer_01_a_macro'`），
+               而代表主机的幽灵**也是巨鳐**（主机开的就是巨鳐）⇒ 地图上并排两艘巨鳐：
+                 ① 遗留的旧出生舰（无人、停在锚点旁）← 多出来的那一艘
+                 ② 幽灵副本 `X4MP Ghost`（本来就该是巨鳐 ✓）
+               这里在创建新舰**之前**把玩家当时那艘记进全局并改名，等玩家真的坐进新舰后
+               静默清掉（下面那段）。改名是为了即使中途存/读档也能认出它。
+               只用本项目已验证的构造：player.ship / set_object_name / destroy_object。 -->
+          <do_if value="player.ship?">
+            <set_value name="global.$X4MPLevelClientOldShip" exact="player.ship" />
+            <set_object_name object="global.$X4MPLevelClientOldShip" name="'X4MP LVL Client Old Ship'" />
+            <debug_text text="'X4MP LEVEL: 记下换舰前的旧舰（搬进新舰后清掉，避免地图上多一艘巨鳐）'" chance="100" />
+          </do_if>
+          <create_ship name="$heroShip" macro="macro.ship_ter_l_destroyer_01_a_macro"
+                       sector="player.sector">
+            <owner exact="faction.player" overridenpc="true" />
+            <!-- ★2026-09-27 绝对坐标（锚点 + 2 km）：客机座舰固定落在锚点旁 2 km 处。
+                 取 2 km 而非 300 m：主机（gamestart 巨鳐）就停在锚点上，而两端都是 L 级
+                 驱逐舰（舰体 ≥1 km）⇒ 300 m 会重叠。2 km 外最近的布景也在 9 km 之外 ✓
+                 （原来是相对"客机自己"的 safepos ⇒ 随客机朝向旋转 = 镜面对称的根因 ✗） -->
+            <position x="global.$X4MPLevelAnchorX" y="global.$X4MPLevelAnchorY"
+                      z="global.$X4MPLevelAnchorZ + 2000" />
+          </create_ship>
+          <!-- ★全副武装：原版「给舰船满配」的写法（md\gm_getexactfleet.xml 实测范式）：
+                 <generate_loadout macro=$shipmacro level=1 result=$loadout/>
+                 <apply_loadout object=$ship loadout=$loadout.{1}/>
+               注意与**空间站**的区别：舰船用 object=，站用 sequence=/index=（站那边踩过坑）。
+               flags="units drones" invertflags="true" = 按本项目路线 B 排除无人机单元。 -->
+          <generate_loadout macro="$heroShip.macro" level="1" faction="faction.terran"
+                            result="$heroLo" flags="units drones" invertflags="true" />
+          <do_if value="$heroLo?">
+            <apply_loadout object="$heroShip" loadout="$heroLo.{1}" />
+            <debug_text text="'X4MP LEVEL: 客机巨兽满配完成（loadout 条目 ' + $heroLo.count + '）'" chance="100" />
+          </do_if>
+          <set_object_name object="$heroShip" name="'X4MP LVL Client Osaka'" />
+          <set_known object="$heroShip" known="true" />
+          <!-- 记下"这条船按新规则（锚点 + 2 km 绝对坐标）放好了"，并用它修旧存档 -->
+          <set_value name="global.$X4MPLevelClientShip" exact="$heroShip" />
+          <set_value name="global.$X4MPLevelClientShipPlace" exact="2" />
+          <debug_text text="'X4MP LEVEL: 客机座舰已创建（下一步：把玩家搬进去）'" chance="100" />
+          </do_if>
+        </do_if>
+        <do_else>
+          <!-- ★已换过舰：只做一次"摆放版本"修补（幂等；补丁落定后永不再触发）。
+               适用场景：旧存档（旧构建把客机座舰放在锚点上）或读到一半的档。 -->
+          <do_if value="not global.$X4MPLevelClientShipPlace? or global.$X4MPLevelClientShipPlace lt 2">
+            <do_if value="not global.$X4MPLevelAnchorX?">
+              <set_value name="global.$X4MPLevelAnchorX" exact="-30678.0" />
+              <set_value name="global.$X4MPLevelAnchorY" exact="0" />
+              <set_value name="global.$X4MPLevelAnchorZ" exact="-122754.0" />
+            </do_if>
+            <warp object="player.ship" sector="player.sector">
+              <position x="global.$X4MPLevelAnchorX" y="global.$X4MPLevelAnchorY"
+                        z="global.$X4MPLevelAnchorZ + 2000" />
+            </warp>
+            <set_value name="global.$X4MPLevelClientShipPlace" exact="2" />
+            <debug_text text="'X4MP LEVEL: 客机座舰摆放升级到 v2（锚点 + 2 km，脱离与主机座舰的重合）'" chance="100" />
+          </do_if>
+        </do_else>
+        <!-- ★2026-09-27 阶段 2（在 if/else 之外，新局和旧档都跑）：**核实玩家真的坐进去了**。
+             teleport_player 不保证一步到位（实测空窗 94 s）⇒ 不在座舰里就每 2 s 再试一次，
+             最多 15 次；坐进去了才置 ClientShipDone=1（完成信号）。 -->
+        <!-- ★★★ 2026-09-27（run #25c）：玩家已在新舰里 ⇒ 静默清掉换舰前那艘旧舰（遗留舰）。
+             条件用 `Done ge 1` 而不是"只在刚刚完成的那一帧"：本 cue 每 2 s 复检，万一第一次
+             destroy 没成功（或中途存/读档）还能自动补一次；清掉后 .exists 变 false ⇒ 之后是
+             零成本空转。`explosion="false"` 与幽灵销毁一致：不爆、不刷事件、不误导玩家
+             （那是玩家自己刚离开的空船）。
+             ⚠️ 不写 `OldShip != ClientShip` 这种判等：按本项目纪律尽量只用已验证的 `==` / `?`
+                组合（`!=` 虽然在本文件里已有先例，但能不用就不用）；这里本来也不可能相等 ——
+                旧舰是在**新舰被创建之前**记下的。 -->
+        <do_if value="global.$X4MPLevelClientShipDone? and global.$X4MPLevelClientShipDone ge 1">
+          <do_if value="global.$X4MPLevelClientOldShip?">
+            <do_if value="global.$X4MPLevelClientOldShip.exists">
+              <destroy_object object="global.$X4MPLevelClientOldShip" explosion="false" />
+              <debug_text text="'X4MP LEVEL: 已清掉换舰前的旧舰（客机世界不再多一艘巨鳐）'" chance="100" />
+            </do_if>
+          </do_if>
+        </do_if>
+        <do_if value="global.$X4MPLevelClientShip? and global.$X4MPLevelClientShip.exists">
+          <do_if value="not player.ship? or player.ship != global.$X4MPLevelClientShip">
+            <do_if value="not global.$X4MPLevelClientShipTry? or global.$X4MPLevelClientShipTry lt 15">
+              <do_if value="global.$X4MPLevelClientShipTry?">
+                <set_value name="global.$X4MPLevelClientShipTry" exact="global.$X4MPLevelClientShipTry + 1" />
+              </do_if>
+              <do_else>
+                <set_value name="global.$X4MPLevelClientShipTry" exact="1" />
+              </do_else>
+              <teleport_player object="global.$X4MPLevelClientShip" instant="true" force="true" control="true" />
+              <debug_text text="'X4MP LEVEL: 把玩家搬进客机座舰（第 ' + global.$X4MPLevelClientShipTry + ' 次）'" chance="100" />
+            </do_if>
+            <do_else>
+              <debug_text text="'X4MP LEVEL: 换舰接管失败 15 次（teleport_player 没能把玩家搬进座舰）'" chance="100" />
+            </do_else>
+          </do_if>
+          <do_else>
+            <do_if value="not global.$X4MPLevelClientShipDone? or global.$X4MPLevelClientShipDone lt 1">
+              <set_value name="global.$X4MPLevelClientShipDone" exact="1" />
+              <debug_text text="'X4MP LEVEL: 客机座舰接管完成（玩家已在 Argon 巨兽里）'" chance="100" />
+            </do_if>
+          </do_else>
+        </do_if>
+      </actions>
+    </cue>
+
+    <!-- 5.1 ★2026-09-27（用户要求"客户端必须完全遵守主机，主机断联后像冻结一样"）
+         ===== 客机冻结判据 ======================================================
+         主机心跳 = 时钟包 `X4MP_HostTimeSync/'clock'`（DLL flush_incoming_time_sync 只在
+         客机触发）⇒ 每个包都把本端 player.age 记进 $X4MPLevelClockAge（见 1.11 cue）。
+         6 s（≈3 个时钟包周期）没刷新 ⇒ 判定主机离线 ⇒ PeerDown = 1。
+         时钟回来 ⇒ 1.11 cue 自己把 PeerDown 清 0 并提示解冻。 -->
+    <cue name="X4MP_Level_PeerWatch" module="x4mp_level_boron" instantiate="true" checkinterval="1s">
+      <conditions>
+        <check_all>
+          <check_value value="global.$X4MPLevelIsClient? and global.$X4MPLevelIsClient ge 1" />
+        </check_all>
+      </conditions>
+      <actions>
+        <do_if value="global.$X4MPLevelClockAge? and global.$X4MPLevelClockAge gt 0 and (player.age - global.$X4MPLevelClockAge) gt 6s">
+          <do_if value="not global.$X4MPLevelPeerDown? or global.$X4MPLevelPeerDown lt 1">
+            <set_value name="global.$X4MPLevelPeerDown" exact="1" />
+            <debug_text text="'X4MP LEVEL: 主机离线（>6 s 无时钟包）⇒ 冻结客机'" chance="100" />
+            <show_notification text="{100002,22}" priority="3" timeout="8s" />
+          </do_if>
+        </do_if>
+      </actions>
+    </cue>
+
+    <!-- 5.2 冻结本身 ============================================================
+         傀儡（NPC）不用在这里处理：它们本来就被 DLL 的 order_wait 冻结、位姿来自主机
+         快照 ⇒ 主机一离线就没有新快照 ⇒ 它们自然停在原地（= 空白世界已经验证过的
+         "主机离线 ⇒ 世界冻结"语义）。
+         本端座舰是唯一还在动的东西，用 <set_object_velocity> 每 200 ms 清一次线速/角速：
+           * 位置连续、不瞬移，不打断停靠/自动驾驶（比 <warp> 安全得多）；
+           * 玩家推满杆也只能在 0.2 s 的加速度里抖几米 ⇒ 观感就是"冻住"。
+         主机回来（PeerDown = 0）⇒ 闸门不成立 ⇒ 本条 cue 自动停止 ⇒ 世界解冻。 -->
+    <cue name="X4MP_Level_Freeze" module="x4mp_level_boron" instantiate="true" checkinterval="100ms">
+      <conditions>
+        <check_all>
+          <check_value value="global.$X4MPLevelIsClient? and global.$X4MPLevelIsClient ge 1" />
+          <check_value value="global.$X4MPLevelPeerDown? and global.$X4MPLevelPeerDown ge 1" />
+        </check_all>
+      </conditions>
+      <actions>
+        <do_if value="player.entity?">
+          <set_object_velocity object="player.entity">
+            <linear x="0" y="0" z="0" />
+            <angular x="0" y="0" z="0" />
+          </set_object_velocity>
+        </do_if>
+      </actions>
+    </cue>
+
+    <!-- 1.12 ★时钟闸门（两端都跑）：+6 s 置 X4MPLevelClockOk。
+         注：客机在收到第一个主机时钟包（X4MP_HostTimeSync/'clock'）时也会置位
+         （见 X4MP_Level_ClientXenonShip）—— 实测两端相差 ~1 s，波次真正靠
+         (player.age + $X4MPHostTimeOffset) 这条主机时钟闸门对齐 ✓
+         2026-09-27：本 cue 原本"主机专属"地新建一艘巨鳐当座舰，现随坐标系统一
+         一并删除（主机 = gamestart 座舰；详见下面 actions 里的注释）。 -->
+    <cue name="X4MP_Level_HostShip" module="x4mp_level_boron" instantiate="true">
+      <conditions>
+        <event_game_started />
+      </conditions>
+      <delay exact="6s" />
+      <actions>
+        <!-- 主机：本端时钟天然就是"主机时钟" ⇒ 直接置位可用标记 -->
+        <set_value name="global.$X4MPLevelClockOk" exact="1" />
+        <!-- ★2026-09-27 坐标系统一后，主机侧**不再新建座舰**：
+             主机就开 gamestart 出生点上的 Boron 巨鳐（出生点 = 场景锚点 ⇒ 它天然在场景里），
+             客机座舰由 X4MP_Level_ClientXenonShip 生成在锚点 + 2 km（两艘 L 级舰体
+             都 ≥1 km ⇒ 300 m 会重叠）✓
+             用户规则"玩家这边最多两艘 L 驱逐舰"⇒ 原来这里多生成的那艘巨鳐
+             （X4MP LVL Host Ray，teleport 早已停用 ⇒ 只是待在原地）连同 do_else 的
+             Argon 巨兽 fallback 一并删除；否则在绝对坐标下它会和主机自己那艘重叠，
+             并且变成玩家侧第 3 艘 L 级 ✗
+             若日后主机 gamestart 座舰改宏，可在此重建，并恢复那行
+             <teleport_player object="…" instant="true" force="true" control="true" /> 即可。 -->
+        <debug_text text="'X4MP LEVEL: 主机座舰 = gamestart 的 Boron 巨鳐（本 cue 不再另建舰）'" chance="100" />
+      </actions>
+    </cue>
+    <!-- 2) 三波 Xenon：间隔 30 秒，**上一波没清完也照常推进**（用户要求）
+         波次生成在玩家与 Xenon 站之间（-12 km 一带），玩家一转身就能打上；
+         "从 Xenon 站起飞 + 飞向贸易站"需要订单/导航 API，留待下一轮。 -->
+    <!-- 2.1 第一波：20 × S Xenon（布景后 30 s） -->
+    <cue name="X4MP_Level_Wave1" module="x4mp_level_boron" instantiate="true" checkinterval="2s">
+      <conditions>
+        <check_all>
+          <!-- 纯周期检查（不放 event_game_started，理由同 Setup cue） -->
+          <check_value value="global.$X4MPLevelReady? and global.$X4MPLevelReady ge 1 and global.$X4MPLevelClockOk? and global.$X4MPLevelClockOk ge 1 and (player.age + global.$X4MPHostTimeOffset) ge 50s" />
+        </check_all>
+      </conditions>
+      <actions>
+        <do_if value="global.$X4MPLevelActive ge 1 and global.$X4MPLevelWave lt 1">
+          <do_all exact="20" counter="$i">
+            <set_value name="$wx" exact="(-9000 + $i * 900)" />
+            <set_value name="$wz" exact="(-78000 - $i * 120)" />
+            <create_ship name="$x1" macro="macro.ship_xen_s_fighter_01_a_macro" sector="player.sector">
+              <owner exact="faction.xenon" overridenpc="true" />
+            <pilot macro="character_xenon_generic_01_macro" />
+              <position x="global.$X4MPLevelAnchorX + $wx" y="global.$X4MPLevelAnchorY"
+                      z="global.$X4MPLevelAnchorZ + $wz" />
+            </create_ship>
+            <!-- ★[BOTH] 同步命名 + 登记（同 1.4 的写法）：波次也必须进 lane —— 否则客机那
+                 20 架会用自己的 AI 打（用户实测"客户端按自己的方式模拟"的主因）。 -->
+            <do_if value="global.$X4MPNpcList?">
+              <set_value name="$npcLid" exact="global.$X4MPNpcList.count + 1" />
+            </do_if>
+            <do_else>
+              <set_value name="$npcLid" exact="1" />
+            </do_else>
+            <set_object_name object="$x1" name="'X4MP NPC ' + $npcLid + ' [BOTH]'" />
+            <append_to_list name="global.$X4MPNpcList" exact="$x1" create="true" />
+            <!-- 满配（Xenon 件）：第一波 20 架也要真能开火 -->
+            <generate_loadout macro="$x1.macro" level="1" faction="faction.xenon"
+                              result="$x1Lo" flags="units drones" invertflags="true" />
+            <do_if value="$x1Lo?">
+              <apply_loadout object="$x1" loadout="$x1Lo.{1}" />
+            </do_if>
+            <set_known object="$x1" known="true" />
+            <!-- 2026-09-26: 没有订单 NPC 就不会动（用户实测）⇒ 一波出生即下令攻击贸易站 -->
+            <!-- ★客机不下单（同 1.4 的说明）：20 架一波也交给主机裁决，客机只镜像 -->
+            <do_if value="not global.$X4MPLevelIsClient? or global.$X4MPLevelIsClient lt 1">
+              <create_order id="'Attack'" object="$x1" immediate="true" override="true">
+                <param name="primarytarget" value="global.$X4MPLevelTradeStn" />
+                <param name="pursuetargets" value="true" />
+                <param name="allowothertargets" value="true" />
+              </create_order>
+            </do_if>
+          </do_all>
+          <set_value name="global.$X4MPLevelWave" exact="1" />
+          <debug_text text="'X4MP LEVEL: WAVE 1 - 20 x Xenon S'" chance="100" />
+          <!-- 阶段 2：清理 Xenon 站引力子炮塔 -->
+          <set_objective cue="X4MP_Level_Mission" step="2" action="objective.destroy"
+                         text="{100002,11}" object="global.$X4MPLevelXenonStn"
+                         updatebriefing="true" insert="true" comment="ClearTurrets" />
+        </do_if>
+      </actions>
+    </cue>
+
+    <!-- 2.2 第二波：10 × M Xenon（+30 s） -->
+    <cue name="X4MP_Level_Wave2" module="x4mp_level_boron" instantiate="true" checkinterval="2s">
+      <conditions>
+        <check_all>
+          <check_value value="global.$X4MPLevelReady? and global.$X4MPLevelReady ge 1 and global.$X4MPLevelClockOk? and global.$X4MPLevelClockOk ge 1 and (player.age + global.$X4MPHostTimeOffset) ge 80s" />
+        </check_all>
+      </conditions>
+      <actions>
+        <do_if value="global.$X4MPLevelActive ge 1 and global.$X4MPLevelWave lt 2">
+          <do_all exact="10" counter="$i">
+            <set_value name="$wx2" exact="(-4500 + $i * 1000)" />
+            <create_ship name="$x2" macro="macro.ship_xen_m_fighter_01_a_macro" sector="player.sector">
+              <owner exact="faction.xenon" overridenpc="true" />
+            <pilot macro="character_xenon_generic_01_macro" />
+              <position x="global.$X4MPLevelAnchorX + $wx2" y="global.$X4MPLevelAnchorY"
+                      z="global.$X4MPLevelAnchorZ - 76000" />
+            </create_ship>
+            <!-- ★[BOTH] 同步命名 + 登记（同 1.4 的写法） -->
+            <do_if value="global.$X4MPNpcList?">
+              <set_value name="$npcLid" exact="global.$X4MPNpcList.count + 1" />
+            </do_if>
+            <do_else>
+              <set_value name="$npcLid" exact="1" />
+            </do_else>
+            <set_object_name object="$x2" name="'X4MP NPC ' + $npcLid + ' [BOTH]'" />
+            <append_to_list name="global.$X4MPNpcList" exact="$x2" create="true" />
+            <!-- 满配（Xenon 件） -->
+            <generate_loadout macro="$x2.macro" level="1" faction="faction.xenon"
+                              result="$x2Lo" flags="units drones" invertflags="true" />
+            <do_if value="$x2Lo?">
+              <apply_loadout object="$x2" loadout="$x2Lo.{1}" />
+            </do_if>
+            <set_known object="$x2" known="true" />
+            <!-- ★客机不下单（同 1.4 的说明） -->
+            <do_if value="not global.$X4MPLevelIsClient? or global.$X4MPLevelIsClient lt 1">
+              <create_order id="'Attack'" object="$x2" immediate="true" override="true">
+                <param name="primarytarget" value="global.$X4MPLevelTradeStn" />
+                <param name="pursuetargets" value="true" />
+                <param name="allowothertargets" value="true" />
+              </create_order>
+            </do_if>
+          </do_all>
+          <set_value name="global.$X4MPLevelWave" exact="2" />
+          <debug_text text="'X4MP LEVEL: WAVE 2 - 10 x Xenon M'" chance="100" />
+        </do_if>
+      </actions>
+    </cue>
+
+    <!-- 2.3 第三波：1 × K（L 级，+30 s） -->
+    <cue name="X4MP_Level_Wave3" module="x4mp_level_boron" instantiate="true" checkinterval="2s">
+      <conditions>
+        <check_all>
+          <check_value value="global.$X4MPLevelReady? and global.$X4MPLevelReady ge 1 and global.$X4MPLevelClockOk? and global.$X4MPLevelClockOk ge 1 and (player.age + global.$X4MPHostTimeOffset) ge 110s" />
+        </check_all>
+      </conditions>
+      <actions>
+        <do_if value="global.$X4MPLevelActive ge 1 and global.$X4MPLevelWave lt 3">
+          <create_ship name="$xk" macro="macro.ship_xen_xl_destroyer_01_a_macro" sector="player.sector">
+            <!-- 2026-09-26 修正：游戏内叫 K 的是 **XL 级驱逐舰** ship_xen_xl_destroyer_01_a
+                 （文本 id 70501 = "K"）；之前用的 ship_xen_l_terraformer_01_a 是 "H"（72001）。 -->
+            <owner exact="faction.xenon" overridenpc="true" />
+            <pilot macro="character_xenon_generic_01_macro" />
+            <position x="global.$X4MPLevelAnchorX" y="global.$X4MPLevelAnchorY"
+                      z="global.$X4MPLevelAnchorZ - 74000" />
+          </create_ship>
+          <!-- ★[BOTH] 同步命名 + 登记（K 也走傀儡 lane ⇒ 位姿/血量/摧毁全部主机权威；
+               名字保留一个 K 后缀只为在 UI 上认得出来，parse_npc_tag 只读数字） -->
+          <do_if value="global.$X4MPNpcList?">
+            <set_value name="$npcLid" exact="global.$X4MPNpcList.count + 1" />
+          </do_if>
+          <do_else>
+            <set_value name="$npcLid" exact="1" />
+          </do_else>
+          <set_object_name object="$xk" name="'X4MP NPC ' + $npcLid + ' K [BOTH]'" />
+          <append_to_list name="global.$X4MPNpcList" exact="$xk" create="true" />
+          <!-- 满配（Xenon 件）：BOSS K 没有主炮就只是个靶子 -->
+          <generate_loadout macro="$xk.macro" level="1" faction="faction.xenon"
+                            result="$xkLo" flags="units drones" invertflags="true" />
+          <do_if value="$xkLo?">
+            <apply_loadout object="$xk" loadout="$xkLo.{1}" />
+          </do_if>
+          <set_known object="$xk" known="true" />
+          <!-- ★客机不下单（同 1.4 的说明）：K 的位姿/血量/摧毁全部由主机的傀儡 lane 下发 -->
+          <do_if value="not global.$X4MPLevelIsClient? or global.$X4MPLevelIsClient lt 1">
+          <create_order id="'Attack'" object="$xk" immediate="true" override="true">
+            <param name="primarytarget" value="global.$X4MPLevelTradeStn" />
+            <param name="pursuetargets" value="true" />
+            <param name="allowothertargets" value="true" />
+          </create_order>
+          </do_if>
+          <set_value name="global.$X4MPLevelK" exact="$xk" />
+          <set_value name="global.$X4MPLevelWave" exact="3" />
+          <debug_text text="'X4MP LEVEL: WAVE 3 - Xenon K'" chance="100" />
+        </do_if>
+      </actions>
+    </cue>
+
+    <!-- 3) K 被摧毁 → Argon 5 × 地狱犬（M 级护卫舰）入场
+          （用户规则：玩家这边最多两艘 L 驱逐舰 ⇒ 增援不再用 L 级巨兽） -->
+    <cue name="X4MP_Level_KDown" module="x4mp_level_boron" instantiate="true">
+      <conditions>
+        <event_object_destroyed />
+      </conditions>
+      <actions>
+        <do_if value="global.$X4MPLevelK? and (event.object == global.$X4MPLevelK or event.param == global.$X4MPLevelK)">
+          <do_if value="global.$X4MPLevelArgonIn lt 1">
+            <do_all exact="5" counter="$i">
+              <set_value name="$ax" exact="(-4000 + $i * 2000)" />
+              <create_ship name="$arg" macro="macro.ship_arg_m_frigate_01_a_macro" sector="player.sector">
+                <owner exact="faction.argon" overridenpc="true" />
+                <pilot macro="character_argon_male_pilot_01_macro" />
+                <position x="global.$X4MPLevelAnchorX + $ax" y="global.$X4MPLevelAnchorY"
+                          z="global.$X4MPLevelAnchorZ - 4000" />
+              </create_ship>
+              <!-- ★[BOTH] 同步命名 + 登记（同 1.4 的写法） -->
+              <do_if value="global.$X4MPNpcList?">
+                <set_value name="$npcLid" exact="global.$X4MPNpcList.count + 1" />
+              </do_if>
+              <do_else>
+                <set_value name="$npcLid" exact="1" />
+              </do_else>
+              <set_object_name object="$arg" name="'X4MP NPC ' + $npcLid + ' [BOTH]'" />
+              <append_to_list name="global.$X4MPNpcList" exact="$arg" create="true" />
+              <!-- 满配（Argon 件）——同时把这一批从 L 巨兽换成 **M 级地狱犬**：
+                   用户规则"玩家这边最多两艘 L 驱逐舰"（主机巨鳐 + 客机巨兽改进型）。 -->
+              <generate_loadout macro="$arg.macro" level="1" faction="faction.argon"
+                                result="$argLo" flags="units drones" invertflags="true" />
+              <do_if value="$argLo?">
+                <apply_loadout object="$arg" loadout="$argLo.{1}" />
+              </do_if>
+              <set_known object="$arg" known="true" />
+              <!-- ★客机不下单（同 1.4 的说明） -->
+              <do_if value="not global.$X4MPLevelIsClient? or global.$X4MPLevelIsClient lt 1">
+              <create_order id="'Attack'" object="$arg" immediate="true" override="true">
+                <param name="primarytarget" value="global.$X4MPLevelXenonStn" />
+                <param name="pursuetargets" value="true" />
+                <param name="allowothertargets" value="true" />
+              </create_order>
+              </do_if>
+            </do_all>
+            <set_value name="global.$X4MPLevelArgonIn" exact="1" />
+            <debug_text text="'X4MP LEVEL: K destroyed - 5 x Argon Cerberus(M) 入场'" chance="100" />
+          </do_if>
+        </do_if>
+      </actions>
+    </cue>
+
+    <!-- 4) 引力子炮塔计数：每毁一座自减（归零 = 可以打站了） -->
+    <cue name="X4MP_Level_TurretCount" module="x4mp_level_boron" instantiate="true">
+      <conditions>
+        <event_object_destroyed />
+      </conditions>
+      <actions>
+        <do_if value="event.object.isclass.turret and global.$X4MPTurretLeft gt 0">
+          <!-- 注：这里"任何炮塔被毁都自减"是骨架版的近似；正式版应校验它属于
+               Xenon 站（且最好是 L 型引力子炮塔），Phase 2/3 时一并收紧。 -->
+          <set_value name="global.$X4MPTurretLeft" operation="add" exact="-1" />
+          <debug_text text="'X4MP LEVEL: 炮塔剩余 ' + global.$X4MPTurretLeft" chance="10" />
+          <do_if value="global.$X4MPTurretLeft le 0 and global.$X4MPLevelStationDown lt 1">
+            <!-- 阶段 3：炮塔清零 → 可以打站了 -->
+            <set_objective cue="X4MP_Level_Mission" step="3" action="objective.destroy"
+                           text="{100002,12}" object="global.$X4MPLevelXenonStn"
+                           updatebriefing="true" insert="true" comment="DestroyStation" />
+            <debug_text text="'X4MP LEVEL: 炮塔已清空 - 目标转向 Xenon 空间站'" chance="100" />
+          </do_if>
+        </do_if>
+      </actions>
+    </cue>
+
+    <!-- 5) Xenon 空间站被摧毁 = 任务完成 -->
+    <cue name="X4MP_Level_Win" module="x4mp_level_boron" instantiate="true">
+      <conditions>
+        <event_object_destroyed />
+      </conditions>
+      <actions>
+        <do_if value="global.$X4MPLevelXenonStn? and (event.object == global.$X4MPLevelXenonStn or event.param == global.$X4MPLevelXenonStn)">
+          <set_value name="global.$X4MPLevelStationDown" exact="1" />
+          <debug_text text="'X4MP LEVEL: 任务完成 - Xenon 空间站已摧毁（剩余炮塔 ' + global.$X4MPTurretLeft + '）'" chance="100" />
+          <!-- 任务完成：type="completed" 会走引擎的"任务成功"提示路径 -->
+          <remove_mission cue="X4MP_Level_Mission" type="completed" />
+        </do_if>
+      </actions>
+    </cue>
+
+    <!-- ==============================================================================
+         ★2026-09-28（run #26f · 合并 Stage 3 第 1 项 / 修 P3 + P4 的第一半）
+         给本关卡两座站的**模块**命名："X4MP STN <idx>#<k>"
+
+         为什么必须要（实测证据 + 读码）：
+           · 客机 91% / 主机 97%（P4）与"炮塔被打掉但客机那份还在开火"（P3）同源；
+           · DLL 的 station_scan_modules() 要求模块名能被 parse_module_tag 解析
+             （sscanf "X4MP STN %u#%u"）⇒ 关卡原来只命名了"站"，**一条模块行都发不出去**
+             （实测 station lane rows(...) modRows(sent/recv/applied)=0/0/0，两边都是 0）；
+           · 没有 per-module 行 ⇒ 客机不能按模块 clamp 站血量，也没有通道让被摧毁的炮塔停火。
+         写法**逐字照抄本工程站点世界已实证的那一段**（md\x4mp_stations.xml:385-394）：
+           find_object_component class="class.module" checkoperational="false" multiple recursive
+           + do_all 循环 set_object_name
+         ⇒ 两端各自给**自己的副本**命名，k = 枚举顺序 ⇒ 两端天然同一个键（"名字即键"，
+            与 X4MP STN n / X4MP NPC n 同一招）。
+         ⚠️ 只在站存在时做；整条 cue 是 45 s 自重启的 ticker —— 模块是"装备 + 成型"之后才
+            出现的，晚到的模块也要能被命名（重复命名同名无害，纯幂等）。
+         ============================================================================== -->
+    <cue name="X4MP_Level_ModuleNaming" module="x4mp_level_boron" instantiate="true">
+      <conditions>
+        <event_game_started />
+      </conditions>
+      <delay exact="45s" />
+      <actions>
+        <!-- 保护目标 = X4MP STN 1 -->
+        <do_if value="global.$X4MPLevelTradeStn? and global.$X4MPLevelTradeStn.exists">
+          <find_object_component name="$lvlMods1" object="global.$X4MPLevelTradeStn" class="class.module"
+                                 checkoperational="false" multiple="true" recursive="true" />
+          <do_if value="$lvlMods1?">
+            <!-- ★2026-09-29（run #26m）：模块注册表（**只建一次**）—— 模块级 veto 回写的目标表。
+                 与站点世界的 global.$X4MPStationMods.{idx} 同构（那份是已实证的写法 ✓）；
+                 本关卡用固定序号 1/2，注册一次后由 X4MP_Level_StationModuleHull 按 idx#k 写回 ✓ -->
+            <do_if value="not global.$X4MPLevelModsReg1? or global.$X4MPLevelModsReg1 lt 1">
+              <set_value name="global.$X4MPLevelMods.1" exact="$lvlMods1" />
+              <set_value name="global.$X4MPLevelModsReg1" exact="1" />
+              <debug_text text="'X4MP LEVEL: STN 1 模块注册表已建立（' + $lvlMods1.count + ' 个）'" chance="100" />
+            </do_if>
+            <do_all exact="$lvlMods1.count" counter="$m1">
+              <set_object_name object="$lvlMods1.{$m1}" name="'X4MP STN 1#' + $m1" />
+            </do_all>
+            <debug_text text="'X4MP LEVEL: STN 1 模块已命名（X4MP STN 1#* 共 ' + $lvlMods1.count + ' 个）'" chance="100" />
+          </do_if>
+        </do_if>
+        <!-- Xenon 防御站 = X4MP STN 2（玩家要打掉炮塔的那座） -->
+        <do_if value="global.$X4MPLevelXenonStn? and global.$X4MPLevelXenonStn.exists">
+          <find_object_component name="$lvlMods2" object="global.$X4MPLevelXenonStn" class="class.module"
+                                 checkoperational="false" multiple="true" recursive="true" />
+          <do_if value="$lvlMods2?">
+            <do_if value="not global.$X4MPLevelModsReg2? or global.$X4MPLevelModsReg2 lt 1">
+              <set_value name="global.$X4MPLevelMods.2" exact="$lvlMods2" />
+              <set_value name="global.$X4MPLevelModsReg2" exact="1" />
+              <debug_text text="'X4MP LEVEL: STN 2 模块注册表已建立（' + $lvlMods2.count + ' 个）'" chance="100" />
+            </do_if>
+            <do_all exact="$lvlMods2.count" counter="$m2">
+              <set_object_name object="$lvlMods2.{$m2}" name="'X4MP STN 2#' + $m2" />
+            </do_all>
+            <debug_text text="'X4MP LEVEL: STN 2 模块已命名（X4MP STN 2#* 共 ' + $lvlMods2.count + ' 个）'" chance="100" />
+          </do_if>
+        </do_if>
+        <!-- 自重启：45 s 后再来一遍（幂等；只为覆盖晚出现的模块） -->
+        <reset_cue cue="X4MP_Level_ModuleNaming" />
+      </actions>
+    </cue>
+
+    <!-- ==============================================================================
+         ★2026-09-29（run #26r）**验收探针：add_effect 到底会不会渲染？**
+         为什么需要：主机已**确定收到**客机的开火行（P2 relay fires(recv) 18→20 ✓），
+         但屏幕上看不到火光 ⇒ 断点只可能在 MD 的 `<add_effect>` 这一句。
+         而本工程里 add_effect 的渲染能力**从未被确认过**：早期那组特效探针（已删除）就是为回答
+         这个问题而写的，但结论从未写回文件（注释只写了"判读方法"）。
+         做法：开档 +20 s / +28 s / +36 s，在**本端自己的座舰**上依次播三个不同的特效名。
+         判读（用外部视角盯着自己的船）：
+           看得见任一次 ⇒ add_effect 能用，问题在我的 lid==0 分支（下一步就查那儿）
+           三次都看不见 ⇒ add_effect 不渲染 ⇒ 改走别的通道（例如曳光/让幽灵真开火）
+         ⚠️ 纯验收用，验完就删（或把 <delay> 改到极大）✓
+         ============================================================================== -->
+    <!-- ==============================================================================
+         【已删除】X4MP_Level_EffectProbe（2026-09-29 run #26t）
+         它当时的唯一用途是回答"<add_effect> 到底渲不渲染"，三次不同特效名都看不见 ⇒
+         结论：add_effect 在本工程路径上不渲染，这条视觉通道作废（用户已决定搁置）。
+         探针本身是临时项，正式包不该带 ⇒ 整条 cue 移除，结论保留在上面这条注释里。
+         相关记账：开火**数据**双向同步是好的（客机 fires(sent) / 主机 fires(recv) 同步增长），
+         缺的只是"能看见"的渲染原语；NPC/空间站的炮火本来就双方可见。
+         ============================================================================== -->
+
+
+    <!-- ==============================================================================
+         ★2026-09-29（run #26m）模块级 veto 的**写回端**（客机侧）
+         链路：客机本地命中某个模块 → station_note_damage() 记下 uid
+               → flush_station_veto() 用主机最近一次权威值 raise `x4mp_station_module_hull`
+               → 本 cue 按 idx#k 写回那个模块 ⇒ 客机引擎从模块推导出的容器值随之收敛 ✓
+         写法与站点世界的 X4MP_StationModuleHull **完全同构**（那份已实证 ✓），只是数据源换成
+         本关卡的注册表 global.$X4MPLevelMods.{idx}（由 X4MP_Level_ModuleNaming 建立 ✓）
+         ⚠️ 站点世界与本关卡的两个 cue 监听**同一个触发**，靠"各自注册表是否存在"互斥
+            （$X4MPStationMods vs $X4MPLevelMods）⇒ 不会互相干扰 ✓
+         ============================================================================== -->
+    <cue name="X4MP_Level_StationModuleHull" module="x4mp_level_boron" instantiate="true">
+      <conditions>
+        <event_ui_triggered screen="'X4MP_StationModuleSync'" control="'mod'" />
+      </conditions>
+      <actions>
+        <set_value name="$lidx"  exact="event.param3.{1}" />
+        <set_value name="$lmod"  exact="event.param3.{2}" />
+        <set_value name="$lhull" exact="event.param3.{3}" />
+        <do_if value="global.$X4MPLevelMods.{$lidx}? and $lhull ge 0">
+          <do_if value="global.$X4MPLevelMods.{$lidx}.{$lmod}?">
+            <set_object_hull object="global.$X4MPLevelMods.{$lidx}.{$lmod}" exact="$lhull" />
+          </do_if>
+        </do_if>
+      </actions>
+    </cue>
+
+    <!-- ==============================================================================
+         ★2026-09-29（run #26t · **用户实测 P0：炮塔在主机侧被摧毁后，客机那一份还在开火、
+         而且它打出的伤害还在生效**）—— 根因与修复
+
+         根因（读码 + 两文件对照）：
+           站点世界有**两条**落地 cue：
+             md\x4mp_stations.xml:554  X4MP_StationModuleHull    → set_object_hull（百分比写回）
+             md\x4mp_stations.xml:751  X4MP_StationModuleDamage  → apply_attackstrength
+                                                                   object=父站 module=该模块
+           而它们各自的监听对象不同：Hull 听 'X4MP_StationModuleSync'/'mod'，
+           Damage 听 'X4MP_StationModuleDamageSync'/'dmg'。
+           本关卡（md\x4mp_level_boron.xml）当初只把 **Hull** 那条抄了过来（1454 行），
+           **Damage 那条没抄** ⇒ 客机侧 DLL 的模块下行（x4mp_native.cpp:4730 raise
+           `x4mp_station_module_damage` → bridge → AddUITriggeredEvent('X4MP_StationModuleDamageSync','dmg')）
+           在本关卡**没有任何监听者**，事件被静默丢弃。
+
+           后果正好就是用户看到的三件事：
+             · 主机的模块行确实到了客机（modRows(recv) 在涨，applied 也在涨 —— applied 只统计
+               "我们 raise 了几次"，不代表 MD 真的落了血）；
+             · 客机那份模块从未真的掉血 ⇒ 主机认为摧毁、客机仍然满血 ⇒ 炮塔继续开火；
+             · 炮塔打出的伤害在客机本地是**真实结算**（客机的炮打的多半是它自己那份英雄船 ——
+               玩家船本来就在本机结算）⇒ "伤害还在"。
+
+         修复：把站点世界那条 Damage cue **逐字等价**地搬到本关卡，只换数据源：
+           $stn = global.$X4MPLevelTradeStn (idx 1) / global.$X4MPLevelXenonStn (idx 2)
+           $mod = global.$X4MPLevelMods.{$idx}.{$k}（由 X4MP_Level_ModuleNaming 建立，k 与
+                  'X4MP STN <idx>#<k>' 的 k 同源 ⇒ 与 DLL 下行的 k 永远一致）
+         关键写法（站点世界 179 次 WRITE LOST 换来的教训）：**object 必须是父站，module 才是模块**；
+         把模块本身当 object 传不报错也不掉血。
+         下行送的是**绝对伤害点数**（DLL 用 hull/hullpercent 换算），所以这里只判 `gt 0`，
+         不碰 $mod.hullpercentage（模块可能不暴露该属性，一旦是 null 整条 cue 会静默跳过）。
+         只减不增：差值为正时开火，模块被打到 0 由**引擎自己**摧毁 ⇒ 炮塔随之消失、停火 ✓
+         读数：global.$X4MPLevelModDmgSeen / $X4MPLevelModDmgApplied（存档或 debug 可查）
+         ============================================================================== -->
+    <cue name="X4MP_Level_StationModuleDamage" instantiate="true">
+      <conditions>
+        <event_ui_triggered screen="'X4MP_StationModuleDamageSync'" control="'dmg'" />
+      </conditions>
+      <actions>
+        <set_value name="$idx"  exact="event.param3.{1}" />
+        <set_value name="$k"    exact="event.param3.{2}" />
+        <set_value name="$abs"  exact="event.param3.{3}" />
+        <set_value name="global.$X4MPLevelModDmgSeen" operation="add" exact="1" />
+        <set_value name="$mod"  exact="global.$X4MPLevelMods.{$idx}.{$k}" />
+        <do_if value="$idx eq 1">
+          <set_value name="$stn" exact="global.$X4MPLevelTradeStn" />
+        </do_if>
+        <do_if value="$idx eq 2">
+          <set_value name="$stn" exact="global.$X4MPLevelXenonStn" />
+        </do_if>
+        <do_if value="$stn? and $mod? and $abs gt 0">
+          <apply_attackstrength object="$stn"
+                                module="$mod"
+                                hullshield="0"
+                                hullonly="$abs"
+                                shieldonly="0"
+                                hullnoshield="0" />
+          <set_value name="global.$X4MPLevelModDmgApplied" operation="add" exact="1" />
+        </do_if>
+      </actions>
+    </cue>
+
+  </cues>
+</mdscript>

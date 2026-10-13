@@ -1,0 +1,5 @@
+<?xml version="1.0" encoding="utf-8"?>
+<content version="0.1.1" id="x4mp_native" name="X4MP Native" description="X4MP network layer based on X4Native — smooth movement + rotation sync." author="X4MP" date="2026-09-29" save="0" enabled="1">
+  <dependency id="x4native" optional="false" />
+  <text language="44" description="X4MP network layer." name="X4MP Native"/>
+</content>
