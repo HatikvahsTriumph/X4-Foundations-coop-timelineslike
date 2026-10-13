@@ -57,13 +57,65 @@ Log files: `Documents\Egosoft\X4\<profile>\x4native\x4mp_native\x4mp_native.log`
 
 ---
 
-## Known issues you should still expect in 0.1.1
+## T7 — Review merge (2026-10-13) — the two things this build is about
 
-These are documented, not new bugs:
+Run these after T6. They are the reason this build exists; everything else is a regression check.
 
-* station module rows on the client may report far fewer `applied` than `sent`
-  (module-level landing; QA P0-2/P0-3 still under investigation);
+Handy one-liner for any log below (the profile folder is the numeric one under
+`Documents\Egosoft\X4\`):
+
+```powershell
+$log = "$env:USERPROFILE\Documents\Egosoft\X4\<profile>\x4native\x4mp_native\x4mp_native.log"
+Select-String -Path $log -Pattern 'X4MP STN|module=|station lane|WRITE LOST|NPC veto|non-numeric|handler .* failed|Property lookup' | Select-Object -Last 60
+```
+
+### T7.1 — station module index (pins down P0-2 / P0-3)
+
+- [ ] new game, wait until both stations and their modules exist (host + client both in the world)
+- [ ] on the host, hit **one single, known module** of station 1 and note which one you hit
+- [ ] the host log then has a `module=` line naming `X4MP STN N#K`, and the hull that changes on the
+      client must be **that same module** (this is the whole point of the fix)
+- [ ] the client log must not show the old `PEER DAMAGE VERIFY ... -> WRITE LOST` burst
+- [ ] report: the DLL `module=` line + which module visibly lost hull
+
+### T7.2 — a dead station must not shift the rest (P0-3)
+
+- [ ] destroy **station 1 completely** on the host, then keep fighting
+- [ ] station 2's modules still sync: `station lane rows(sent/recv/applied)` keeps growing and the
+      client keeps showing applied rows (not a flat "sent only" line)
+- [ ] destroy station 2 as well and confirm the mission win still fires
+
+### T7.3 — level globals / freeze rate (P1-5, P1-6)
+
+- [ ] from a new game onward the log has no `Property lookup failed` next to destroy events
+- [ ] kill the host (close the game): the client freezes, and the freeze cue in the client log ticks
+      half as often as the old build (200 ms instead of 100 ms)
+
+### T7.4 — peer death, twice (P1-8)
+
+- [ ] let the peer's ship be destroyed **twice** in one session
+- [ ] the ghost is removed and rebuilt both times. Removal stays silent (`explosion="false"`): the
+      replica disappears, no explosion — that is intended, not a bug
+
+### T7.5 — installer / tool hardening (P1, P2)
+
+- [ ] `1-INSTALL.bat`: at the host-IP prompt type `999.999.999.999` ⇒ rejected; type `q` ⇒ clean exit
+      (before: the loose regex accepted 999.x, and an empty line spun forever)
+- [ ] `tools\x4mp_savecheck.ps1` against your biggest save ⇒ finishes in seconds
+      (before: it copied the rest of the save file once per `<hull>` record)
+- [ ] a normal session produces no `x4mp_bridge: non-numeric field` lines. If one appears, that
+      payload really was malformed — report the line (it used to fail silently instead)
+- [ ] no `x4mp_bridge: handler ... failed` lines: one broken lane now logs and the other 21 keep running
+
+---
+
+## Known issues you should still expect
+
+* **being verified by this build:** station module rows used to land on the wrong module (name/table
+  base mismatch, then index drift once a station died). T7.1/T7.2 are the acceptance test for that
+  fix. If `applied` still lags far behind `sent`, capture the T7.1 pair of lines before reporting.
 * a turret destroyed on the host may keep firing on the client (the turret lane is not implemented yet);
 * the client cannot see the other player's weapon fire (the effect line is deliberately not in
   this package);
 * `NPC veto applied` lines are rate-limited, so a burst of corrections only prints a few lines.
+* uninstalling removes the third-party `x4native` extension as well (known, deliberate).
