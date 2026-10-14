@@ -212,7 +212,8 @@ function Move-StaleExtensionCopies([string]$x4) {
         if ($hit) { $stale += $d }
     }
     if (-not $stale.Count) { return }
-    $dst = Join-Path $x4 ('_x4mp_backups_moved_' + (Get-Date -Format 'yyyyMMdd_HHmmss'))
+    # ★2026-10-14: 单一固定目录（原来按时间戳新建 ⇒ 每跑一次多一个目录）
+    $dst = Join-Path $x4 '_x4mp_stale'
     New-Item -ItemType Directory -Force -Path $dst | Out-Null
     foreach ($d in $stale) {
         Move-Item -LiteralPath $d.FullName -Destination (Join-Path $dst $d.Name) -Force -ErrorAction SilentlyContinue
@@ -221,31 +222,80 @@ function Move-StaleExtensionCopies([string]$x4) {
     Say '      (X4 loads every extension folder under extensions\; a stale copy with the same id makes the two worlds disagree)' 'DarkGray'
 }
 
+# ★2026-10-14 重做备份策略（用户反馈：开一次联机就多一个 backup 文件夹 ✗）：
+#   旧代码每次运行都建 <X4>\_x4mp_backup_<时间戳>\ —— 而 Porthole 式启动器每次开局都会
+#   再跑一遍这个安装器 ⇒ 游戏目录里按次堆积一堆内容完全相同的备份。
+#   现在的规则只有两条：
+#     1) 已装版本与本包**逐文件同构** ⇒ 根本不需要备份（什么都不建）；
+#     2) 确实要覆盖别人的旧版本 ⇒ 只保留**唯一一个**固定名备份目录 <X4>\_x4mp_backup\<ext>\
+#        （覆盖式，不追加）。想还原就把它拷回 extensions\ 即可。
+function Get-DirSignature([string]$dir) {
+    if (-not (Test-Path -LiteralPath $dir)) { return '' }
+    $parts = Get-ChildItem -LiteralPath $dir -Recurse -File -ErrorAction SilentlyContinue |
+             Sort-Object FullName |
+             ForEach-Object { $_.FullName.Substring($dir.Length).TrimStart('\') + '|' + $_.Length }
+    return ($parts -join "`n")
+}
+
 function Backup-Existing([string]$x4) {
     $extRoot = Join-Path $x4 'extensions'
-    $stamp   = Get-Date -Format 'yyyyMMdd_HHmmss'
-    # ★放在 <X4> 根目录(与 X4.exe 同级)，**不在** extensions\ 里面 —— 见上面
-    # the Move-StaleExtensionCopies notes.
-    $bkRoot  = Join-Path $x4 "_x4mp_backup_$stamp"
-    $moved   = @()
+
+    # 1) 装的就是这一版 ⇒ 没有“旧东西”值得留
+    $same = $true
+    $any  = $false
+    foreach ($n in $script:ExtNames) {
+        $cur = Join-Path $extRoot $n
+        if (-not (Test-Path -LiteralPath $cur)) { continue }
+        $any = $true
+        if ((Get-DirSignature $cur) -ne (Get-DirSignature (Join-Path $script:StageExt $n))) { $same = $false; break }
+    }
+    if ($any -and $same) {
+        Say '  [OK] the installed build is identical to this pack - no backup needed' 'Green'
+        return
+    }
+
+    # 2) 否则：单一备份目录，覆盖式
+    #    ★仍然放在 <X4> 根目录（与 X4.exe 同级），**不在** extensions\ 里面 —— 见 Move-StaleExtensionCopies
+    $bkRoot = Join-Path $x4 '_x4mp_backup'
+    $moved  = @()
     foreach ($n in $script:ExtNames) {
         $p = Join-Path $extRoot $n
         if (Test-Path -LiteralPath $p) {
             New-Item -ItemType Directory -Force -Path $bkRoot | Out-Null
-            Move-Item -LiteralPath $p -Destination (Join-Path $bkRoot $n) -Force
+            $t = Join-Path $bkRoot $n
+            if (Test-Path -LiteralPath $t) { Remove-Item -LiteralPath $t -Recurse -Force -ErrorAction SilentlyContinue }
+            Move-Item -LiteralPath $p -Destination $t -Force
             $moved += $n
         }
     }
     if ($moved.Count) {
-        Say ("  moved old same-named extensions to the backup folder: {0}" -f $bkRoot) 'Yellow'
-        Say ("     (backup contains: {0})" -f ($moved -join ', ')) 'DarkGray'
+        Say ("  moved the previous extensions to the single backup folder: {0}" -f $bkRoot) 'Yellow'
+        Say ("     (contains: {0} - replaced on the next install, delete it whenever you like)" -f ($moved -join ', ')) 'DarkGray'
     }
+}
+
+# ★2026-10-14：把老版本安装器按次留下的备份目录折进一个地方，别再让游戏根目录越开越多。
+# 只移动，不删除 —— 确认没用后你可以整个删掉 <X4>\_x4mp_backup\_legacy\。
+function Cleanup-LegacyBackups([string]$x4) {
+    $legacy = Get-ChildItem -LiteralPath $x4 -Directory -ErrorAction SilentlyContinue |
+              Where-Object { $_.Name -match '^_x4mp_(backup|removed|backups_moved)_\d{8}_\d{6}$' }
+    if (-not $legacy) { return }
+    $dst = Join-Path $x4 '_x4mp_backup\_legacy'
+    New-Item -ItemType Directory -Force -Path $dst | Out-Null
+    foreach ($d in $legacy) {
+        $t = Join-Path $dst $d.Name
+        if (Test-Path -LiteralPath $t) { Remove-Item -LiteralPath $t -Recurse -Force -ErrorAction SilentlyContinue }
+        Move-Item -LiteralPath $d.FullName -Destination $t -Force -ErrorAction SilentlyContinue
+    }
+    Say ("  [!] folded {0} old per-run backup folder(s) from earlier installers into: {1}" -f @($legacy).Count, $dst) 'Yellow'
+    Say '      (nothing was deleted - you can remove that whole folder yourself)' 'DarkGray'
 }
 
 function Install-Files([string]$x4) {
     $extRoot = Join-Path $x4 'extensions'
     New-Item -ItemType Directory -Force -Path $extRoot | Out-Null
     Move-StaleExtensionCopies $x4      # ★run #26: first move stale copies/backups out of extensions\
+    Cleanup-LegacyBackups $x4          # ★2026-10-14: fold old per-run backup folders into one place
     Backup-Existing $x4
     foreach ($n in $script:ExtNames) {
         $src = Join-Path $script:StageExt $n
@@ -263,15 +313,18 @@ function Install-Files([string]$x4) {
 
 function Remove-Files([string]$x4) {
     $extRoot = Join-Path $x4 'extensions'
-    $stamp   = Get-Date -Format 'yyyyMMdd_HHmmss'
     # ★run #26: 同样放到 <X4> 根目录，不放 extensions\(见 Move-StaleExtensionCopies)
-    $bkRoot  = Join-Path $x4 "_x4mp_removed_$stamp"
+    # ★2026-10-14: 固定名（原来带时间戳 ⇒ 每次卸载都多一个目录）
+    $bkRoot  = Join-Path $x4 '_x4mp_removed'
     Move-StaleExtensionCopies $x4
+    Cleanup-LegacyBackups $x4
     foreach ($n in $script:ExtNames) {
         $p = Join-Path $extRoot $n
         if (Test-Path -LiteralPath $p) {
             New-Item -ItemType Directory -Force -Path $bkRoot | Out-Null
-            Move-Item -LiteralPath $p -Destination (Join-Path $bkRoot $n) -Force
+            $t = Join-Path $bkRoot $n
+            if (Test-Path -LiteralPath $t) { Remove-Item -LiteralPath $t -Recurse -Force -ErrorAction SilentlyContinue }
+            Move-Item -LiteralPath $p -Destination $t -Force
             Say ("  [OK] removed {0}" -f $n) 'Green'
         }
     }
@@ -424,7 +477,7 @@ if ($Uninstall) {
     Head 'uninstall: move the extensions out + delete the role config'
     Remove-Files $x4
     Say ''
-    Say '  Uninstall complete (the old files are under extensions\_x4mp_removed_*; you may delete them).' 'Yellow'
+    Say '  Uninstall complete (the old files are under <X4>\_x4mp_removed\; you may delete that folder).' 'Yellow'
     exit 0
 }
 
