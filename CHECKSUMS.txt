@@ -1,7 +1,7 @@
 X4MP 0.1.1 - SHA-256 checksums
 generated: 
-2026-10-13 22:47:20
-scope: 0.1 baseline + client ship (Terran Osaka) + NPC authority write-back + 2026-10-13 review merge
+2026-10-14 17:55:07
+scope: 0.1 baseline + client ship (Terran Osaka) + NPC authority write-back + 2026-10-13 review merge + 2026-10-14 single-backup installer fix
 note: docs/*, README.md, CREDITS.md, LICENSE, .gitignore are not listed (text only)
 
 file (relative to the pack root)  bytes  sha256
@@ -69,6 +69,6 @@ files\extensions\x4native\ui\x4native.lua  10689  EE7EB40C9C56C4B3571CD20F0EBDEF
 files\extensions\x4native\x4native_settings.json  31  AC6E3B8DE47E862E0DA4FD81B454A165107552760E4A6B650E8F43F873AF5177
 tools\manifest.txt  6570  9517F0429CEA7438A007E7A16F29438E3F34CAFF19B921548ED0D9391C91A244
 tools\x4mp_fit_halfscreen.ps1  7529  7CE9C68A93CCF9BC5A49A01FBFE0808ED404ABF29855EFE8B22793D72DFFDC5F
-tools\x4mp_install.ps1  24547  C7A92E2C59C2B2FBBD65E3291A593E4D87FEADF48C50419C35ED5046F30DE8DA
+tools\x4mp_install.ps1  27795  A7860FD10935554B4DD024C1F0A86E2559D16A7977D6F942DCDD389164126106
 tools\x4mp_savecheck.ps1  14729  74D658834F91B0C63AA43599BCFFB6B1B4B5967BC7CD3419D702ECCC04ED34F6
 tools\x4mp_tag_windows.ps1  8481  6FFB3C1DAF2A089B7A247A876FF5592300A5947CB2C9471AE8F8082BE5A3F053
