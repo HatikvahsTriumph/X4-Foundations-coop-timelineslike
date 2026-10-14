@@ -79,3 +79,26 @@ the station-module and level findings hit us too. Per-item mapping: `docs/REVIEW
   registrations wrapped, 14 payload tables validated).
 * Unchanged on purpose: no Porthole tunnel code, the DLL is untouched, uninstall behaviour
   (including the third-party `x4native` removal) is unchanged.
+## Post-release: installer backup policy (2026-10-14)
+
+Reported: every time the co-op pack was started the game folder gained another
+`_x4mp_backup_<timestamp>` folder - Porthole-style launchers re-run this installer on every launch.
+
+* A backup is now **skipped entirely when the installed build already matches the pack** (the normal
+  re-run case): the game folder is not touched at all.
+* When something else really is being replaced, exactly **one** backup is kept:
+  `<X4>\_x4mp_backup\<ext>\` (written over, never appended). Uninstall uses `<X4>\_x4mp_removed\`,
+  stale-copy handling uses `<X4>\_x4mp_stale\`.
+* Per-run backup folders left by earlier installers are folded into `<X4>\_x4mp_backup\_legacy\`
+  (moved, never deleted) on the next install.
+* Verified in a sandbox: first run (foreign content) creates the single backup, second run with the
+  same build prints `no backup needed` and adds nothing.
+## Post-release: missing Chinese text page (2026-10-14)
+
+Reported: the level header showed `readtext100002-1` in a Chinese-language game.
+
+* The review merge build had dropped `t\0001-l086.xml` when the English pack was assembled, so the
+  Chinese client had no strings for text page 100002 (level/mission name).
+* The English package now ships **both** text pages: `t\0001-l044.xml` (English) and `t\0001-l086.xml`
+  (Chinese), like the reference package does. A full audit of the pack found all 16 `{1000xx,N}`
+  references defined in both pages (0 missing).

@@ -1,0 +1,26 @@
+<?xml version="1.0" encoding="utf-8"?>
+<language id="86">
+  <page id="100000" title="X4MP" descr="X4MP 联机测试文本" voice="no">
+    <t id="1">X4MP 空白宇宙</t>
+    <t id="2">用于 X4MP 联机测试的单个空星区。</t>
+    <t id="3">X4MP 飞行员</t>
+  </page>
+  <page id="100001" title="X4MP 空间站" descr="X4MP 空间站测试世界文本" voice="no">
+    <t id="1">X4MP 空间站世界</t>
+    <t id="2">单个空星区，预置三座成品空间站（停靠 / 遇袭 / 防空），用于联机空间站同步测试。</t>
+    <t id="3">X4MP 飞行员</t>
+  </page>
+  <page id="100002" title="X4MP 关卡" descr="X4MP 时间线关卡文本" voice="no">
+    <t id="1">X4MP：梦幻海洋守卫战</t>
+    <t id="2">你是 Boron 巨鳐的舰长：保护贸易空间站，击退三波 Xenon（20 架 S / 10 架 M / 1 艘 K），清掉 Xenon 空间站的引力子炮塔，最后摧毁它。</t>
+    <t id="10">保护 Boron 贸易空间站</t>
+    <t id="11">清理 Xenon 空间站的引力子炮塔</t>
+    <t id="12">摧毁 Xenon 空间站</t>
+    <t id="13">梦幻海洋守住了</t>
+    <t id="20">梦幻海洋</t>
+    <t id="21">X4MP 关卡专用星区（私有星系：舞台上只有关卡自己的角色）。</t>
+    <t id="22">主机已离线 —— 世界已冻结，等待主机返回</t>
+    <t id="23">主机回来了 —— 世界恢复同步</t>
+    <t id="3">X4MP 飞行员</t>
+  </page>
+</language>

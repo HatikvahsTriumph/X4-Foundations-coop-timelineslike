@@ -86,3 +86,9 @@ other's ships. 0.1.1 detects this: the window title gains
 | Both connect but see nothing of each other | Different worlds/gamestarts (see step 3) |
 | Client ship is missing a loadout / empty hull | It was created without a faction loadout; re-enter the level |
 | "Property lookup failed" spam in the log | Please report it with the log lines — see `docs/QA-REVIEW-CHECKLIST.md` (P1-4) |
+
+## Backups (installer 0.1.4)
+
+The installer no longer creates a new backup folder on every run. Re-running it with the same build
+changes nothing at all; when it replaces a different build it keeps a single backup at
+`<X4>\_x4mp_backup\` (and folds older per-run backups into `<X4>\_x4mp_backup\_legacy\`).
